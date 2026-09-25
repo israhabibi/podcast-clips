@@ -1,0 +1,30 @@
+# Python environment and generated cache
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Secrets and local credentials
+.env
+.env.*
+!.env.example
+credentials/
+*_token.json
+app/youtube_token.json
+
+# Source media and rendered clips
+*.mp4
+*.mov
+*.mkv
+app/static/clips/
+
+# Pipeline output and local working data
+captions.json
+clips.json
+search_results.json
+transcript*.json
+subs.ass
+
+# Local/editor and OS files
+.DS_Store
+.vscode/

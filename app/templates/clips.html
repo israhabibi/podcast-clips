@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="id" data-bs-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Podcast Shorts</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.min.css" rel="stylesheet">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        html, body { 
+            background: #000; 
+            color: #fff; 
+            height: 100%; 
+            overflow: hidden;
+            font-family: system-ui, -apple-system, sans-serif;
+        }
+        .shorts-container {
+            height: 100dvh;
+            overflow-y: scroll;
+            scroll-snap-type: y mandatory;
+            scroll-behavior: smooth;
+        }
+        .shorts-container::-webkit-scrollbar { display: none; }
+        .shorts-container { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        .short-item {
+            height: 100dvh;
+            scroll-snap-align: start;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            background: #000;
+        }
+        .video-wrapper {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #000;
+            position: relative;
+            overflow: hidden;
+        }
+        .video-wrapper video {
+            height: 100%;
+            width: 100%;
+            max-width: min(100%, 56.25vh);
+            object-fit: contain;
+            background: #000;
+            cursor: pointer;
+        }
+        
+        .short-overlay {
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: linear-gradient(transparent, rgba(0,0,0,.9) 40%);
+            padding: 60px 16px 16px;
+            pointer-events: none;
+        }
+        .short-overlay > * { pointer-events: auto; }
+        .short-overlay h1 {
+            font-size: 1rem;
+            font-weight: 700;
+            margin-bottom: 4px;
+        }
+        .short-overlay .episode-tag {
+            font-size: .7rem;
+            color: #aaa;
+            margin-bottom: 6px;
+        }
+        .short-overlay .caption-text {
+            font-size: .82rem;
+            color: #ccc;
+            line-height: 1.4;
+        }
+        .short-overlay .caption-text a {
+            color: #5b9aff;
+            text-decoration: none;
+        }
+        .short-overlay .caption-text a:hover { text-decoration: underline; }
+
+        .short-sidebar {
+            position: absolute;
+            right: 8px;
+            bottom: 120px;
+            display: flex;
+            flex-direction: column;
+            gap: 16px;
+            align-items: center;
+            pointer-events: none;
+            z-index: 5;
+        }
+        .short-sidebar > * { pointer-events: auto; }
+        .short-sidebar .action-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+            color: #fff;
+            text-decoration: none;
+            font-size: .6rem;
+            opacity: .85;
+            transition: opacity .15s;
+        }
+        .short-sidebar .action-btn:hover { opacity: 1; }
+        .short-sidebar .action-btn i { font-size: 1.5rem; filter: drop-shadow(0 1px 3px rgba(0,0,0,.5)); }
+        .short-sidebar .action-btn span { filter: drop-shadow(0 1px 2px rgba(0,0,0,.5)); }
+
+        .mute-btn {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            z-index: 6;
+            background: rgba(0,0,0,.6);
+            border-radius: 50%;
+            width: 36px;
+            height: 36px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: background .15s;
+        }
+        .mute-btn:hover { background: rgba(0,0,0,.8); }
+        .mute-btn i { font-size: 1.1rem; color: #fff; }
+
+        .short-progress {
+            position: fixed;
+            right: 12px;
+            top: 50%;
+            transform: translateY(-50%);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            z-index: 10;
+            pointer-events: none;
+        }
+        .short-progress > * { pointer-events: auto; }
+        .short-progress .dot {
+            width: 6px; height: 6px;
+            border-radius: 50%;
+            background: #555;
+            transition: all .2s;
+            cursor: pointer;
+        }
+        .short-progress .dot.active { 
+            background: #fff; 
+            height: 18px; 
+            border-radius: 4px; 
+            width: 4px;
+        }
+
+        .short-nav {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            z-index: 10;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 16px;
+            background: linear-gradient(rgba(0,0,0,.7), transparent);
+            pointer-events: none;
+        }
+        .short-nav > * { pointer-events: auto; }
+        .short-nav .brand { font-weight: 700; font-size: .95rem; }
+        .short-nav .brand i { color: #ff4d4d; }
+
+        @media (min-width: 768px) {
+            .short-item { align-items: center; }
+            .video-wrapper video { max-height: 100dvh; }
+            .short-sidebar { right: 24px; bottom: 140px; }
+            .short-overlay { padding: 80px 24px 24px; max-width: 600px; left: 50%; transform: translateX(-50%); width: 100%; }
+        }
+    </style>
+</head>
+<body>
+
+<div class="short-nav">
+    <span class="brand"><i class="bi bi-play-btn-fill me-1"></i>Podcast Shorts</span>
+    <span class="badge bg-light text-dark" id="counter">1 / {{ captions|length }}</span>
+</div>
+
+<div class="short-progress" id="progressDots">
+    {% for c in clips_meta %}
+    <div class="dot {% if loop.first %}active{% endif %}" onclick="goTo({{ loop.index0 }})"></div>
+    {% endfor %}
+</div>
+
+<div class="shorts-container" id="shortsContainer">
+    {% for c in clips_meta %}
+    {% set idx = loop.index | string %}
+    {% set cap = captions.get(idx, {}) %}
+    {% set caption_text = cap.get('caption', '').strip() %}
+    <div class="short-item" data-index="{{ loop.index0 }}">
+        <div class="video-wrapper">
+            <video preload="metadata" playsinline
+                   onplay="pauseOthers(this); updateCounter({{ loop.index0 }})"
+                   onended="playNext()">
+                <source src="/static/clips/{{ podcast }}/{{ episode }}/{{ cap.get('clip', 'clip%02d.mp4' % loop.index) }}" type="video/mp4">
+            </video>
+            <div class="mute-btn" onclick="toggleMute(this)">
+                <i class="bi bi-volume-mute-fill"></i>
+            </div>
+        </div>
+
+        <div class="short-overlay">
+            <h1>{{ cap.get('title', c.title) }}</h1>
+            <div class="episode-tag">
+                <i class="bi bi-clock me-1"></i>{{ c.start | int // 60 }}:{{ '%02d' % (c.start | int % 60) }} — {{ c.end | int // 60 }}:{{ '%02d' % (c.end | int % 60) }}
+                <span class="mx-2">·</span>
+                <i class="bi bi-camera-video me-1"></i>Klip {{ loop.index }} dari {{ clips_meta|length }}
+            </div>
+            {% if caption_text %}
+            <div class="caption-text">
+                {% for part in caption_text.split('https://') %}
+                {% if loop.first %}{{ part }}{% else %}
+                {% set url_parts = part.split(' ', 1) %}
+                <a href="https://{{ url_parts[0] }}" target="_blank">🔗 baca selengkapnya</a>{% if url_parts|length > 1 %} {{ url_parts[1] }}{% endif %}
+                {% endif %}
+                {% endfor %}
+            </div>
+            {% endif %}
+        </div>
+
+        <div class="short-sidebar">
+            <a class="action-btn" href="#" onclick="togglePlay(this)" title="Play/Pause">
+                <i class="bi bi-play-circle-fill"></i>
+                <span>Putar</span>
+            </a>
+            <a class="action-btn" href="{{ '/static/clips/' + podcast + '/' + episode + '/' + cap.get('clip', 'clip%02d.mp4' % loop.index) }}" download="{{ cap.get('title', 'klip' + loop.index|string) }}.mp4" title="Download">
+                <i class="bi bi-download"></i>
+                <span>Download</span>
+            </a>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<script>
+const container = document.getElementById('shortsContainer');
+const videos = container.querySelectorAll('video');
+const dots = document.querySelectorAll('.dot');
+const counter = document.getElementById('counter');
+
+function pauseOthers(current) {
+    videos.forEach(v => { if (v !== current) v.pause(); });
+}
+
+function updateCounter(idx) {
+    dots.forEach(d => d.classList.remove('active'));
+    if (dots[idx]) dots[idx].classList.add('active');
+    counter.textContent = (idx + 1) + ' / ' + videos.length;
+}
+
+function playNext() {
+    const current = container.querySelector('.short-item:first-child video');
+    const idx = Array.from(videos).indexOf(current);
+    if (idx < videos.length - 1) {
+        const nextItem = container.children[idx + 1];
+        if (nextItem) {
+            nextItem.scrollIntoView({ behavior: 'smooth' });
+            setTimeout(() => { videos[idx + 1]?.play(); }, 500);
+        }
+    }
+}
+
+function goTo(idx) {
+    const target = container.children[idx];
+    if (target) {
+        target.scrollIntoView({ behavior: 'smooth' });
+        setTimeout(() => { videos[idx]?.play(); }, 500);
+    }
+}
+
+function togglePlay(btn) {
+    const item = btn.closest('.short-item');
+    const vid = item.querySelector('video');
+    const icon = btn.querySelector('i');
+    if (vid.paused) { vid.play(); icon.className = 'bi bi-pause-circle-fill'; }
+    else { vid.pause(); icon.className = 'bi bi-play-circle-fill'; }
+}
+
+function toggleMute(btn) {
+    const item = btn.closest('.short-item');
+    const vid = item.querySelector('video');
+    vid.muted = !vid.muted;
+    btn.querySelector('i').className = vid.muted ? 'bi bi-volume-mute-fill' : 'bi bi-volume-up-fill';
+    // If first interaction, try to start playback
+    if (vid.paused) vid.play().catch(() => {});
+}
+
+// Auto-play on scroll
+let scrollTimeout;
+container.addEventListener('scroll', () => {
+    clearTimeout(scrollTimeout);
+    scrollTimeout = setTimeout(() => {
+        const items = container.querySelectorAll('.short-item');
+        let activeIdx = 0;
+        items.forEach((item, i) => {
+            const rect = item.getBoundingClientRect();
+            const mid = rect.top + rect.height / 2;
+            if (mid > 0 && mid < window.innerHeight) activeIdx = i;
+        });
+        updateCounter(activeIdx);
+        videos.forEach((v, i) => {
+            if (i === activeIdx) {
+                v.play().catch(() => {});
+            } else {
+                v.pause();
+            }
+        });
+    }, 100);
+});
+
+// Tap video toggle
+videos.forEach(v => {
+    v.addEventListener('click', () => {
+        const item = v.closest('.short-item');
+        const icon = item.querySelector('.action-btn i');
+        if (v.paused) { v.play(); if(icon) icon.className = 'bi bi-pause-circle-fill'; }
+        else { v.pause(); if(icon) icon.className = 'bi bi-play-circle-fill'; }
+    });
+});
+
+// Start first
+setTimeout(() => { videos[0]?.play().catch(() => {}); }, 1000);
+</script>
+</body>
+</html>

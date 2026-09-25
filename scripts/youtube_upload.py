@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Upload clip to YouTube Shorts."""
+import json, os, sys
+from google.oauth2.credentials import Credentials
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaFileUpload
+
+TOKEN_FILE = os.path.expanduser("~/Documents/project-test/youtube_token.json")
+CLIPS_DIR = os.path.expanduser("~/Documents/project-test/static/clips")
+CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json")
+
+def upload_clip(video_path, title, description, tags=None):
+    if not os.path.exists(TOKEN_FILE):
+        return {"error": "Belum OAuth. Buka https://clips.gcp.my.id/auth dulu."}
+    
+    creds = Credentials.from_authorized_user_file(TOKEN_FILE, 
+        ['https://www.googleapis.com/auth/youtube'])
+    
+    youtube = build('youtube', 'v3', credentials=creds)
+    
+    body = {
+        'snippet': {
+            'title': (title + ' #Shorts')[:100],
+            'description': description.strip(),
+            'tags': tags or ['shorts', 'podcast', 'tempo', 'indonesia'],
+            'categoryId': '25'  # News & Politics
+        },
+        'status': {
+            'privacyStatus': 'public',
+            'selfDeclaredMadeForKids': False
+        }
+    }
+    
+    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
+    
+    request = youtube.videos().insert(
+        part='snippet,status',
+        body=body,
+        media_body=media
+    )
+    
+    response = request.execute()
+    return {
+        "video_id": response['id'],
+        "url": f"https://youtube.com/watch?v={response['id']}",
+        "title": response['snippet']['title']
+    }
+
+if __name__ == '__main__':
+    if len(sys.argv) < 2:
+        print("Usage: python youtube_upload.py <clip_num>")
+        print("       python youtube_upload.py all")
+        sys.exit(1)
+    
+    if not os.path.exists(TOKEN_FILE):
+        print("ERROR: Belum OAuth. Buka https://clips.gcp.my.id/auth")
+        sys.exit(1)
+    
+    caps = json.load(open(CAPTIONS_FILE))
+    
+    if sys.argv[1] == 'all':
+        for idx in sorted(caps.keys(), key=int):
+            clip_file = os.path.join(CLIPS_DIR, caps[idx]['clip'])
+            if os.path.exists(clip_file):
+                r = upload_clip(clip_file, caps[idx]['title'], caps[idx]['caption'])
+                print(f"  ✅ {r['url']}" if 'url' in r else f"  ❌ {r['error']}")
+    else:
+        idx = sys.argv[1]
+        if idx not in caps:
+            print(f"Clip {idx} not found")
+            sys.exit(1)
+        clip_file = os.path.join(CLIPS_DIR, caps[idx]['clip'])
+        r = upload_clip(clip_file, caps[idx]['title'], caps[idx]['caption'])
+        if 'url' in r:
+            print(f"✅ {r['url']}")
+        else:
+            print(f"❌ {r['error']}")
