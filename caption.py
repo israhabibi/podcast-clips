@@ -20,11 +20,6 @@ def llm(prompt):
         headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
     return json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"]
 
-def search(q, limit=4):
-    """Web search via Hermes CLI bridge (dipanggil dari luar) — di sini dummy output file."""
-    # dipakai kalau search_results.json ada
-    pass
-
 results = {}
 search_data = json.load(open("search_results.json")) if os.path.exists("search_results.json") else {}
 
@@ -34,21 +29,24 @@ for i, c in enumerate(clips, 1):
     # 1. LLM buat search query dari isi klip
     q = llm(f"Berdasarkan transkrip klip podcast ini, buat SATU search query berbahasa Indonesia untuk mencari berita terkait topiknya. Balas HANYA query-nya, tanpa penjelasan.\n\nTranskrip: {text[:1500]}").strip().strip('"')
     print(f"clip{i:02d} query: {q}")
-    # 2. cari berita (pakai hasil pre-fetched kalau ada, trigger ke hermes kalau gak)
+    # 2. cari berita (pakai hasil pre-fetched)
     found = search_data.get(str(i)) or search_data.get(i)
     if not found:
-        # fallback: tanya LLM langsung (pengetahuan model, tandai sebagai suggestion)
         found = []
-    # 3. LLM rangkai caption
-    refs = "\n".join(f"- {f['title']}: {f['url']}" for f in found[:3]) if found else "(tidak ada hasil search)"
+    # 3. LLM rangkai caption (tanpa link — link ditambahkan setelah)
     cap = llm(f"""Kamu social media manager. Klip podcast ini akan diposting ke TikTok.
 Buat caption TikTok: 1-2 kalimat hook + 1-3 hashtag relevan bahasa Indonesia.
-{'JANGAN sertakan link' if not found else 'Sertakan MAXIMAL 1 link berita paling relevan dari daftar ini, taruh di akhir:' if found else ''}
-{refs}
+JANGAN sertakan link apapun.
 
 Transkrip klip: {text[:1200]}
 
 Balas HANYA caption-nya.""")
+
+    # FORCE semua 3 link dari search_results ke akhir caption
+    if found:
+        cap = cap.strip() + "\n\n📰 Baca selengkapnya:\n"
+        for f in found:
+            cap += f"🔗 {f['title']}\n{f['url']}\n\n"
     results[str(i)] = {"clip": f"clip{i:02d}.mp4", "title": c["title"], "caption": cap, "query": q}
     print(f"  caption: {cap[:100]}")
 
