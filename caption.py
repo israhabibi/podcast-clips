@@ -42,11 +42,11 @@ Transkrip klip: {text[:1200]}
 
 Balas HANYA caption-nya.""")
 
-    # FORCE semua 3 link dari search_results ke akhir caption
+    # FORCE semua link dari search_results ke akhir caption
     if found:
-        cap = cap.strip() + "\n\n📰 Baca selengkapnya:\n"
+        cap = cap.strip()
         for f in found:
-            cap += f"🔗 {f['title']}\n{f['url']}\n\n"
+            cap += f"\n{f['url']}"
     results[str(i)] = {"clip": f"clip{i:02d}.mp4", "title": c["title"], "caption": cap, "query": q}
     print(f"  caption: {cap[:100]}")
 
