@@ -17,15 +17,14 @@ podcast-clips/
 │   ├── templates/
 │   │   └── clips.html     # Shorts-style gallery
 │   └── static/clips/      # Video files + metadata
-├── scripts/               # Pipeline scripts
-│   ├── download.py        # yt-dlp wrapper
-│   ├── transcribe.py      # YouTube API transcript → segments
-│   ├── curate.py          # LLM-based moment selection
-│   ├── cut_smart.py       # Face-track 9:16 crop + subtitles
-│   ├── caption.py         # LLM caption + news links
-│   ├── youtube_upload.py  # Upload to YouTube Shorts
-│   └── tiktok_upload.py   # Upload to TikTok inbox
-├── clips/                 # Working directory for pipeline
+├── scripts/               # Upload and transcript utility scripts
+├── work/                  # Local episode workspace (ignored generated media/data)
+│   ├── ep1/               # Source video, transcript, metadata, subtitles, clips
+│   ├── ep2/
+│   └── ai-tutorial/
+├── curate.py              # LLM-based moment selection
+├── cut_smart.py           # Face-track 9:16 crop + subtitles
+├── caption.py             # LLM caption + news links
 ├── monitor.py             # RSS monitor (3 playlists)
 ├── credentials/           # API keys & OAuth info
 └── README.md
@@ -34,13 +33,34 @@ podcast-clips/
 ## Pipeline
 
 1. **Monitor** — `monitor.py` cek RSS 3 playlist Tempo tiap hari
-2. **Download** — yt-dlp 720p mp4
-3. **Transcribe** — YouTube API transcript → segments JSON
-4. **Curate** — SumoPod LLM pilih 6 momen terbaik
-5. **Cut** — Face-track 9:16 + subtitle burn-in
-6. **Caption** — LLM generate caption + search berita terkait
+2. **Download** — simpan source video ke `work/<episode>/`
+3. **Transcribe** — tulis segments JSON ke `work/<episode>/transcript.json`
+4. **Curate** — SumoPod LLM pilih 6–12 momen terbaik
+5. **Cut** — Face-track 9:16 + subtitle burn-in ke `work/<episode>/clips/`
+6. **Caption** — LLM generate caption + search berita terkait di folder episode
 7. **Deploy** — Copy ke Flask static + restart
 8. **Upload** — YouTube Shorts & TikTok inbox
+
+## Yang Bekerja
+
+| Tahap | Komponen | Yang mengerjakan | Output |
+|---|---|---|---|
+| Monitor | `monitor.py` | CPU lokal + network RSS YouTube | Episode baru |
+| Download | `yt-dlp` | CPU lokal + network YouTube | Video di `work/<episode>/` |
+| Transcribe | faster-whisper | CPU lokal, cukup berat dan lama | `transcript.json` |
+| Transcribe alternatif | YouTube transcript API | YouTube API, hampir tanpa beban CPU | `transcript.json` |
+| Curate | `curate.py` | LLM SumoPod/API | `clips.json`, 6–12 momen |
+| Cut dan reframe | `cut_smart.py` + OpenCV + FFmpeg | CPU lokal, tahap paling berat | Video 9:16 di `clips/` |
+| Caption | `caption.py` | LLM SumoPod/API + data search | `captions.json` |
+| Web gallery | Flask | CPU/server lokal | `clips.gcp.my.id` |
+| Upload | YouTube/TikTok API | Network + API platform | Video terpublikasi atau masuk inbox |
+
+### Ringkasnya
+
+- **LLM/API:** kurasi momen dan pembuatan caption di `curate.py` dan `caption.py`.
+- **CPU lokal:** transkripsi faster-whisper, deteksi wajah, reframe crop, subtitle, dan encoding FFmpeg.
+- **Network/API:** download video, RSS monitor, YouTube transcript, OAuth, dan upload.
+- **Folder `work/` bersifat lokal:** video dan hasil pipeline di-ignore Git; yang dikirim ke GitHub hanya kode, dokumentasi, dan template konfigurasi.
 
 ## Cronjob
 

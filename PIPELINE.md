@@ -5,21 +5,21 @@ description: Use when clipping a podcast video into TikTok/Shorts clips and publ
 
 # Podcast Clipping Pipeline
 
-Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` with faster-whisper, opencv-headless, scipy). No GPU needed; CPU whisper `small` runs ~0.6x realtime on 8 cores.
+Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` with faster-whisper, opencv-headless, scipy). Each episode uses its own `work/<episode>/` directory. No GPU needed; CPU whisper `small` runs ~0.6x realtime on 8 cores.
 
 ## Pipeline (in order)
 
-1. **Download**: `~/.local/bin/yt-dlp -f "bv*[height<=720]+ba/b[height<=720]" --merge-output-format mp4 -o "epN.%(ext)s" <url>`. If a video file already exists (e.g., downloaded via youtube-content skill), rename/copy it to `epN.mp4` and skip this step.
+1. **Download**: `~/.local/bin/yt-dlp -f "bv*[height<=720]+ba/b[height<=720]" --merge-output-format mp4 -o "work/<episode>/epN.%(ext)s" <url>`. If a video file already exists (e.g., downloaded via youtube-content skill), place it in the episode workspace and skip this step.
 2. **Transcribe**: Two options —  
-   - **faster-whisper** (offline, 15+ min for long videos): run with `background=true, notify=true`, model `small`, `int8`, `language="id"`, `vad_filter=True` → `transcript.json` (`[{start,end,text}]`).  
+   - **faster-whisper** (offline, 15+ min for long videos): run with `background=true, notify=true`, model `small`, `int8`, `language="id"`, `vad_filter=True` → `work/<episode>/transcript.json` (`[{start,end,text}]`).
    - **YouTube API transcript** (instant, requires subtitles available): use the youtube-content skill's `fetch_transcript.py --timestamps --text-only --language id,en` for the text, pipe into the conversion script:
      ```
-     uv run python /home/isra/.hermes/skills/media/youtube-content/scripts/fetch_transcript.py <URL> --timestamps --text-only --language id,en | uv run python scripts/youtube_transcript_to_segments.py
+   PODCAST_TRANSCRIPT_FILE=work/<episode>/transcript.json uv run python /home/isra/.hermes/skills/media/youtube-content/scripts/fetch_transcript.py <URL> --timestamps --text-only --language id,en | uv run python scripts/youtube_transcript_to_segments.py
      ```
      The script parses `MM:SS text` lines, merges same-timestamp utterances, and estimates end times from the next line's start. Verify segment count and first-line text match the episode before proceeding with curate.
-3. **Curate**: `curate.py <model>` — sends timestamped transcript to a cheap SumoPod LLM, returns 6 moments (40–70s, hook-first, standalone, no politics/SARA) → `clips.json`.
-4. **Cut**: `.venv/bin/python cut_smart.py epN.mp4` — face-tracked 9:16 crop + burned-in ASS subtitles → `clips/clipNN.mp4`.
-5. **Caption**: Before running, create `search_results.json` — do a `web_search` for each clip's topic (title/hook), take top 3 results per clip, write as `{"1": [{"title": ..., "url": ...}, ...], ...}`. **Pilih sumber berita dari media Indonesia bereputasi** (Tempo, Kompas, CNN Indonesia, MetroTV, IDN Times, RMOL, tribun) — jangan pakai situs analisis generik (windonesia.com, cockatoo.com, suarakita.net) karena user tolak itu. Kemudian jalankan `caption.py` → LLM writes TikTok hook + hashtags only (prompt says "JANGAN sertakan link apapun"), then **programmatically force-appends all 3 news links** after the LLM call with "📰 Baca selengkapnya:" header → `captions.json`. This bypasses the LLM's unreliable link inclusion entirely.
+3. **Curate**: `PODCAST_WORK_DIR=work/<episode> python curate.py <model>` — sends timestamped transcript to a cheap SumoPod LLM, returns 6–12 moments (40–70s, hook-first, standalone, no politics/SARA) → `work/<episode>/clips.json`.
+4. **Cut**: `PODCAST_WORK_DIR=work/<episode> .venv/bin/python cut_smart.py work/<episode>/epN.mp4` — face-tracked 9:16 crop + burned-in ASS subtitles → `work/<episode>/clips/clipNN.mp4`.
+5. **Caption**: Create `work/<episode>/search_results.json` with the top 3 reputable Indonesian news results per clip, then run `PODCAST_WORK_DIR=work/<episode> python caption.py` → `work/<episode>/captions.json`.
 
 6. **Deliver video + caption TOGETHER, every time**: the user requires the video file (copy to `~/.hermes/cache/scratch/`, then a `MEDIA:/path` line) AND its caption with all 3 related-news links in the SAME chat message.
 
@@ -41,8 +41,8 @@ Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` w
    PODCAST=jelasin-dong
    EP_DIR="2026-09-19_episode-slug"
    mkdir -p ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR
-   cp clips/clip*.mp4 ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
-   cp clips.json captions.json ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
+   cp work/$EPISODE/clips/clip*.mp4 ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
+   cp work/$EPISODE/clips.json work/$EPISODE/captions.json ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
    ```
 
    Restart: `systemctl --user restart flask-app`. Verify: `curl http://localhost:5000/` (index with episode list) and `curl http://localhost:5000/clips/$PODCAST/$EP_DIR` (Shorts viewer).
@@ -94,10 +94,10 @@ Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` w
 
 ## Hard rules
 
-- **Never reuse a `transcript.json` or `search_results.json` across episodes.** Both files are shared scratch names. After any re-transcribe and re-search, verify segment count and first-line text before running curate/caption. Leftover search data or a previous episode's transcript produces clips whose subtitles and captions describe a different video — this has happened and shipped to the user.
+- **Never reuse a `transcript.json` or `search_results.json` across episodes.** Keep both inside the relevant `work/<episode>/` directory. After any re-transcribe and re-search, verify segment count and first-line text before running curate/caption.
 - **Long transcribes must run with `background=true, notify=true`.** A 28-min video takes ~25 min on CPU; foreground calls hit the 600s cap.
 - **Update search_results.json BEFORE running caption.py in background.** If you update search_results.json after starting a background caption process, the running process will use the stale data. The caption process reads search_results.json at startup — any writes after that are invisible until re-run.
-- **YouTube descriptions must match captions.json after re-generation.** If captions are re-generated (e.g. to fix links), update all 6 YouTube video descriptions immediately via `youtube.videos().update()`. YouTube descriptions do not auto-sync from `captions.json` — they are written once during upload and remain stale until explicitly updated.
+- **YouTube descriptions must match captions.json after re-generation.** If captions are re-generated (e.g. to fix links), update all 6–12 YouTube video descriptions immediately via `youtube.videos().update()`. YouTube descriptions do not auto-sync from `captions.json` — they are written once during upload and remain stale until explicitly updated.
 - **Deliver ONE sample video + its caption to the user for review before batch-posting anything.** LLM caption quality is ~70% — the user reviews and corrects topic errors; captions are the step that fails, video rarely.
 - **Caption news links must be from reputable Indonesian media** (Tempo, Kompas, CNN Indonesia, MetroTV, IDN Times, RMOL, tribun). User rejects generic analysis sites (windonesia.com, cockatoo.com, suarakita.net) as irrelevant. Filter search_results.json to only include links from trusted sources before running caption.py.
 - **Caption leading whitespace**: The caption.py script prefixes captions with `\n\n`. Strip with `.strip()` before sending messages and before uploading to YouTube. Raw newlines make the first display line blank and look sloppy.

@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Cut klip dengan auto-reframe: crop 9:16 ngikutin pembicara (YuNet face detect)."""
 import json, subprocess, os, sys, tempfile
+from pathlib import Path
 import cv2
 import numpy as np
 
-EP = sys.argv[1] if len(sys.argv) > 1 else "ep1.mp4"
-os.makedirs("clips", exist_ok=True)
-clips = json.load(open("clips.json"))
-segs = json.load(open("transcript.json"))
+EP = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("PODCAST_VIDEO", "work/ep1/ep1.mp4"))
+WORK_DIR = Path(os.environ.get("PODCAST_WORK_DIR", str(EP.parent)))
+CLIPS_DIR = WORK_DIR / "clips"
+CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+clips = json.load(open(WORK_DIR / "clips.json"))
+segs = json.load(open(WORK_DIR / "transcript.json"))
 FONT = "DejaVuSans-Bold"
 
 det = cv2.FaceDetectorYN.create("/tmp/face_yunet.onnx", "", (320, 320), 0.6)
@@ -107,7 +110,8 @@ for i, c in enumerate(clips, 1):
         return f"{hh}:{m:02d}:{s:05.2f}"
     for st, en, txt in subs:
         ass.append(f"Dialogue: 0,{ts(st)},{ts(en)},Default,,0,0,0,,{txt}")
-    open("subs.ass", "w").write("\n".join(ass))
+    subs_file = WORK_DIR / "subs.ass"
+    subs_file.write_text("\n".join(ass))
     # FFmpeg needs an interpolated x value; using a constant per interval causes visible jumps.
     exprs = []
     for j, (t, x) in enumerate(track[:-1]):
@@ -118,10 +122,10 @@ for i, c in enumerate(clips, 1):
         exprs.append(f"if(between(t\\,{t:.3f}\\,{next_t:.3f})\\,{interpolated_x}\\,")
     xexpr = "".join(exprs) + f"{track[-1][1] - crop_w/2:.0f}" + ")" * len(exprs)
     vf = (f"crop={crop_w}:ih:'{xexpr}':0,scale=1080:1920,"
-          f"ass=subs.ass:fontsdir=/usr/share/fonts/truetype/dejavu")
-    out = f"clips/clip{i:02d}.mp4"
+          f"ass={subs_file}:fontsdir=/usr/share/fonts/truetype/dejavu")
+    out = str(CLIPS_DIR / f"clip{i:02d}.mp4")
     r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),
-        "-i", EP, "-vf", vf, "-c:v", "libx264", "-preset", "medium",
+        "-i", str(EP), "-vf", vf, "-c:v", "libx264", "-preset", "medium",
         "-crf", "23", "-c:a", "aac", "-b:a", "128k", out],
         capture_output=True, text=True)
     if r.returncode == 0:

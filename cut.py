@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Cut klip dari clips.json: crop 9:16 + subtitle burn-in gaya TikTok."""
 import json, subprocess, os, sys
+from pathlib import Path
 
-os.makedirs("clips", exist_ok=True)
-clips = json.load(open("clips.json"))
-segs = json.load(open("transcript.json"))
+EP = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("PODCAST_VIDEO", "work/ep1/ep1.mp4"))
+WORK_DIR = Path(os.environ.get("PODCAST_WORK_DIR", str(EP.parent)))
+CLIPS_DIR = WORK_DIR / "clips"
+CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+clips = json.load(open(WORK_DIR / "clips.json"))
+segs = json.load(open(WORK_DIR / "transcript.json"))
 FONT = "DejaVuSans-Bold"
 ok = 0
 for i, c in enumerate(clips, 1):
@@ -35,12 +39,13 @@ for i, c in enumerate(clips, 1):
         return f"{h}:{m:02d}:{s:05.2f}"
     for st, en, txt in subs:
         ass.append(f"Dialogue: 0,{ts(st)},{ts(en)},Default,,0,0,0,,{txt}")
-    open("subs.ass", "w").write("\n".join(ass))
-    out = f"clips/clip{i:02d}.mp4"
+    subs_file = WORK_DIR / "subs.ass"
+    subs_file.write_text("\n".join(ass))
+    out = str(CLIPS_DIR / f"clip{i:02d}.mp4")
     vf = (f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,"
           f"ass=subs.ass:fontsdir=/usr/share/fonts/truetype/dejavu")
     r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),
-        "-i", "ep1.mp4", "-vf", vf, "-c:v", "libx264", "-preset", "medium",
+        "-i", str(EP), "-vf", vf, "-c:v", "libx264", "-preset", "medium",
         "-crf", "23", "-c:a", "aac", "-b:a", "128k", out],
         capture_output=True, text=True)
     if r.returncode == 0:

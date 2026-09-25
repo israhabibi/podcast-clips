@@ -10,7 +10,8 @@ Input format (from fetch_transcript.py --timestamps --text-only --language id,en
 
 Output: [{start, end, text}] array written to transcript.json
 """
-import sys, re, json
+import sys, re, json, os
+from pathlib import Path
 
 lines = sys.stdin.read().strip().split("\n")
 segments = []
@@ -39,5 +40,7 @@ for i, s in enumerate(merged):
     else:
         s["end"] = s["start"] + 3
 
-json.dump(merged, open("transcript.json", "w"), ensure_ascii=False, indent=2)
-print(f"{len(merged)} segments written to transcript.json", file=sys.stderr)
+output_file = Path(os.environ.get("PODCAST_TRANSCRIPT_FILE", "work/ep1/transcript.json"))
+output_file.parent.mkdir(parents=True, exist_ok=True)
+json.dump(merged, open(output_file, "w"), ensure_ascii=False, indent=2)
+print(f"{len(merged)} segments written to {output_file}", file=sys.stderr)

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Kurasi momen terbaik dari transkrip podcast via LLM (SumoPod)."""
 import json, sys, os, urllib.request
+from pathlib import Path
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
 if not KEY:
@@ -11,7 +12,9 @@ if not KEY:
     sys.exit("API key not found")
 
 MODEL = sys.argv[1] if len(sys.argv) > 1 else "MiniMax-M2.7-highspeed"
-segs = json.load(open("transcript.json"))
+WORK_DIR = Path(os.environ.get("PODCAST_WORK_DIR", "work/ep1"))
+WORK_DIR.mkdir(parents=True, exist_ok=True)
+segs = json.load(open(WORK_DIR / "transcript.json"))
 
 # buat transkrip bertimestamp (per ~30s chunk biar ringkas)
 lines = []
@@ -60,6 +63,6 @@ content = content[content.index("["):content.rindex("]")+1]
 clips = json.loads(content)
 if not 6 <= len(clips) <= 12:
     sys.exit(f"LLM returned {len(clips)} clips; expected between 6 and 12")
-json.dump(clips, open("clips.json", "w"), ensure_ascii=False, indent=2)
+json.dump(clips, open(WORK_DIR / "clips.json", "w"), ensure_ascii=False, indent=2)
 for c in clips:
     print(f"{c['start']:.0f}-{c['end']:.0f}s | {c['title']}")

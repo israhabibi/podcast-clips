@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Caption + link berita terkait per klip via LLM + web search."""
 import json, sys, os, urllib.request, urllib.parse
+from pathlib import Path
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
 if not KEY:
@@ -8,8 +9,10 @@ if not KEY:
         if line.startswith("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY="):
             KEY = line.strip().split("=", 1)[1].strip().strip('"')
 
-clips = json.load(open("clips.json"))
-segs = json.load(open("transcript.json"))
+WORK_DIR = Path(os.environ.get("PODCAST_WORK_DIR", "work/ep1"))
+WORK_DIR.mkdir(parents=True, exist_ok=True)
+clips = json.load(open(WORK_DIR / "clips.json"))
+segs = json.load(open(WORK_DIR / "transcript.json"))
 
 def llm(prompt):
     req = urllib.request.Request(
@@ -21,7 +24,8 @@ def llm(prompt):
     return json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"]
 
 results = {}
-search_data = json.load(open("search_results.json")) if os.path.exists("search_results.json") else {}
+search_file = WORK_DIR / "search_results.json"
+search_data = json.load(open(search_file)) if search_file.exists() else {}
 
 for i, c in enumerate(clips, 1):
     t0, t1 = float(c["start"]), float(c["end"])
@@ -50,5 +54,5 @@ Balas HANYA caption-nya.""")
     results[str(i)] = {"clip": f"clip{i:02d}.mp4", "title": c["title"], "caption": cap, "query": q}
     print(f"  caption: {cap[:100]}")
 
-json.dump(results, open("captions.json", "w"), ensure_ascii=False, indent=2)
+json.dump(results, open(WORK_DIR / "captions.json", "w"), ensure_ascii=False, indent=2)
 print("\nsaved captions.json")
