@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Upload clip to YouTube Shorts."""
-import json, os, sys
+import json, os, re, sys
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
@@ -8,6 +8,11 @@ from googleapiclient.http import MediaFileUpload
 TOKEN_FILE = os.path.expanduser("~/Documents/project-test/youtube_token.json")
 CLIPS_DIR = os.path.expanduser("~/Documents/project-test/static/clips")
 CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json")
+
+def youtube_description(description):
+    """Keep the caption text but omit external news URLs from YouTube Shorts."""
+    without_urls = re.sub(r"https?://\S+", "", description)
+    return "\n".join(line.rstrip() for line in without_urls.splitlines()).strip()
 
 def upload_clip(video_path, title, description, tags=None):
     if not os.path.exists(TOKEN_FILE):
@@ -21,7 +26,7 @@ def upload_clip(video_path, title, description, tags=None):
     body = {
         'snippet': {
             'title': (title + ' #Shorts')[:100],
-            'description': description.strip(),
+            'description': youtube_description(description),
             'tags': tags or ['shorts', 'podcast', 'tempo', 'indonesia'],
             'categoryId': '25'  # News & Politics
         },

@@ -214,10 +214,11 @@
             </div>
             {% if caption_text %}
             <div class="caption-text">
-                {% for part in caption_text.split('https://') %}
-                {% if loop.first %}{{ part }}{% else %}
-                {% set url_parts = part.split(' ', 1) %}
-                <a href="https://{{ url_parts[0] }}" target="_blank">🔗 baca selengkapnya</a>{% if url_parts|length > 1 %} {{ url_parts[1] }}{% endif %}
+                {% for line in caption_text.splitlines() %}
+                {% if line.startswith('https://') or line.startswith('http://') %}
+                <a href="{{ line }}" target="_blank" rel="noopener">🔗 baca selengkapnya</a>
+                {% else %}
+                {{ line }}{% if not loop.last %}<br>{% endif %}
                 {% endif %}
                 {% endfor %}
             </div>

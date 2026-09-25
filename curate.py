@@ -33,7 +33,7 @@ transcript_text = "\n".join(lines)
 
 prompt = f"""Kamu editor clip podcast. Dibawah ini transkrip podcast berbahasa Indonesia dengan timestamp.
 
-Pilih 6 momen TERBAIK untuk dijadikan klip TikTok (durasi 40-70 detik). Kriteria:
+Pilih jumlah momen TERBAIK yang paling sesuai, antara 6 sampai 12 momen, untuk dijadikan klip TikTok (durasi 40-70 detik). Jangan selalu memilih 6; gunakan 6-12 sesuai banyaknya momen kuat yang benar-benar layak. Kriteria:
 - Ada punchline, hot take, cerita lucu, momen kaget, atau insight menarik
 - Pembukaan klip harus langsung hook (kalimat pertama menarik, bukan kalimat lanjutan)
 - Klip harus berdiri sendiri (gak perlu konteks sebelumnya)
@@ -58,6 +58,8 @@ resp = json.load(urllib.request.urlopen(req, timeout=300))
 content = resp["choices"][0]["message"]["content"].strip()
 content = content[content.index("["):content.rindex("]")+1]
 clips = json.loads(content)
+if not 6 <= len(clips) <= 12:
+    sys.exit(f"LLM returned {len(clips)} clips; expected between 6 and 12")
 json.dump(clips, open("clips.json", "w"), ensure_ascii=False, indent=2)
 for c in clips:
     print(f"{c['start']:.0f}-{c['end']:.0f}s | {c['title']}")

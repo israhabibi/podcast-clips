@@ -108,8 +108,14 @@ for i, c in enumerate(clips, 1):
     for st, en, txt in subs:
         ass.append(f"Dialogue: 0,{ts(st)},{ts(en)},Default,,0,0,0,,{txt}")
     open("subs.ass", "w").write("\n".join(ass))
-    # sendfile filter: crop bergeser mengikuti track
-    exprs = [f"if(between(t\\,{t:.2f}\\,{(track[j+1][0] if j+1 < len(track) else dur):.2f})\\,{x - crop_w/2:.0f}\\," for j, (t, x) in enumerate(track)]
+    # FFmpeg needs an interpolated x value; using a constant per interval causes visible jumps.
+    exprs = []
+    for j, (t, x) in enumerate(track[:-1]):
+        next_t, next_x = track[j + 1]
+        x0 = x - crop_w / 2
+        x1 = next_x - crop_w / 2
+        interpolated_x = f"({x0:.3f}+({x1 - x0:.3f})*(t-{t:.3f})/{next_t - t:.3f})"
+        exprs.append(f"if(between(t\\,{t:.3f}\\,{next_t:.3f})\\,{interpolated_x}\\,")
     xexpr = "".join(exprs) + f"{track[-1][1] - crop_w/2:.0f}" + ")" * len(exprs)
     vf = (f"crop={crop_w}:ih:'{xexpr}':0,scale=1080:1920,"
           f"ass=subs.ass:fontsdir=/usr/share/fonts/truetype/dejavu")
