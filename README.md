@@ -18,7 +18,7 @@ podcast-clips/
 │   │   └── clips.html     # Shorts-style gallery
 │   └── static/clips/      # Video files + metadata
 ├── scripts/               # Upload and transcript utility scripts
-├── work/                  # Local episode workspace (ignored generated media/data)
+├── work/                  # Archived local episode workspaces (ignored generated media/data)
 │   ├── ep1/               # Source video, transcript, metadata, subtitles, clips
 │   ├── ep2/
 │   └── ai-tutorial/
@@ -33,10 +33,10 @@ podcast-clips/
 ## Pipeline
 
 1. **Monitor** — `monitor.py` cek RSS 3 playlist Tempo tiap hari
-2. **Download** — simpan source video ke `work/<episode>/`
-3. **Transcribe** — tulis segments JSON ke `work/<episode>/transcript.json`
+2. **Download** — simpan source video ke `/tmp/podcast-clips/<episode-id>/`
+3. **Transcribe** — tulis segments JSON ke `/tmp/podcast-clips/<episode-id>/transcript.json`
 4. **Curate** — SumoPod LLM pilih 6–12 momen terbaik
-5. **Cut** — Face-track 9:16 + subtitle burn-in ke `work/<episode>/clips/`
+5. **Cut** — Face-track 9:16 + subtitle burn-in ke `/tmp/podcast-clips/<episode-id>/clips/`
 6. **Caption** — LLM generate caption + search berita terkait di folder episode
 7. **Deploy** — Copy ke Flask static + restart
 8. **Upload** — YouTube Shorts & TikTok inbox
@@ -46,7 +46,7 @@ podcast-clips/
 | Tahap | Komponen | Yang mengerjakan | Output |
 |---|---|---|---|
 | Monitor | `monitor.py` | CPU lokal + network RSS YouTube | Episode baru |
-| Download | `yt-dlp` | CPU lokal + network YouTube | Video di `work/<episode>/` |
+| Download | `yt-dlp` | CPU lokal + network YouTube | Video di `/tmp/podcast-clips/<episode-id>/` |
 | Transcribe | faster-whisper | CPU lokal, cukup berat dan lama | `transcript.json` |
 | Transcribe alternatif | YouTube transcript API | YouTube API, hampir tanpa beban CPU | `transcript.json` |
 | Curate | `curate.py` | LLM SumoPod/API | `clips.json`, 6–12 momen |
@@ -60,7 +60,7 @@ podcast-clips/
 - **LLM/API:** kurasi momen dan pembuatan caption di `curate.py` dan `caption.py`.
 - **CPU lokal:** transkripsi faster-whisper, deteksi wajah, reframe crop, subtitle, dan encoding FFmpeg.
 - **Network/API:** download video, RSS monitor, YouTube transcript, OAuth, dan upload.
-- **Folder `work/` bersifat lokal:** video dan hasil pipeline di-ignore Git; yang dikirim ke GitHub hanya kode, dokumentasi, dan template konfigurasi.
+- **Folder `/tmp/podcast-clips/` bersifat sementara:** video dan hasil pipeline tidak masuk Git; yang dikirim ke GitHub hanya kode, dokumentasi, dan template konfigurasi. Folder `work/` hanya arsip lokal lama.
 
 ## Cronjob
 
@@ -74,3 +74,12 @@ uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
+
+Untuk upload hasil episode tertentu, arahkan uploader ke workspace episode tersebut:
+
+```bash
+PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python scripts/youtube_upload.py all
+PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python scripts/tiktok_upload.py all
+```
+
+Ganti `work/<episode>` dengan `/tmp/podcast-clips/<episode-id>` untuk episode baru. Token OAuth tetap tersimpan di `app/`.

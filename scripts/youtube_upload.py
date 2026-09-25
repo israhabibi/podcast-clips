@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
 """Upload clip to YouTube Shorts."""
 import json, os, re, sys
+from pathlib import Path
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 
-TOKEN_FILE = os.path.expanduser("~/Documents/project-test/youtube_token.json")
-CLIPS_DIR = os.path.expanduser("~/Documents/project-test/static/clips")
-CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json")
+REPO_DIR = Path(__file__).resolve().parents[1]
+WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
+WORK_DIR = Path(WORK_DIR_VALUE) if WORK_DIR_VALUE else None
+TOKEN_FILE = Path(os.environ.get("YOUTUBE_TOKEN_FILE", REPO_DIR / "app" / "youtube_token.json"))
+CLIPS_DIR = WORK_DIR / "clips" if WORK_DIR else None
+CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json") if CLIPS_DIR else None
 
 def youtube_description(description):
     """Keep the caption text but omit external news URLs from YouTube Shorts."""
@@ -52,6 +56,9 @@ def upload_clip(video_path, title, description, tags=None):
     }
 
 if __name__ == '__main__':
+    if WORK_DIR is None:
+        print("ERROR: Set PODCAST_WORK_DIR, e.g. PODCAST_WORK_DIR=/tmp/podcast-clips/episode-id")
+        sys.exit(1)
     if len(sys.argv) < 2:
         print("Usage: python youtube_upload.py <clip_num>")
         print("       python youtube_upload.py all")

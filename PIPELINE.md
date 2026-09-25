@@ -5,21 +5,43 @@ description: Use when clipping a podcast video into TikTok/Shorts clips and publ
 
 # Podcast Clipping Pipeline
 
-Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` with faster-whisper, opencv-headless, scipy). Each episode uses its own `work/<episode>/` directory. No GPU needed; CPU whisper `small` runs ~0.6x realtime on 8 cores.
+Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` with faster-whisper, opencv-headless, scipy). Each episode uses its own `/tmp/podcast-clips/<episode-id>/` directory while processing. No GPU needed; CPU whisper `small` runs ~0.6x realtime on 8 cores.
+
+## Hermes Agent Contract
+
+These rules are mandatory for every new episode. Treat this section as the source of truth when running or updating the podcast-clipping skill.
+
+1. **Use an isolated workspace.** Create a unique `/tmp/podcast-clips/<episode-id>/` directory for an episode in progress. Do not reuse another episode's video, transcript, `search_results.json`, `clips.json`, or `captions.json`.
+2. **Never trust the `ep1` fallback.** Set `PODCAST_WORK_DIR` explicitly for every `curate.py`, `caption.py`, `cut.py`, `cut_smart.py`, YouTube upload, and TikTok upload command. The episode's video path must be passed explicitly to the cut command.
+3. **Verify source identity before curation.** Confirm the source video exists, record its duration with `ffprobe`, confirm the transcript is non-empty and has valid ordered `start`/`end` fields, and compare the transcript's first spoken text with the first 30 seconds of that same video. Stop if they do not match.
+4. **Keep processing local until review.** Run transcription, LLM curation, caption generation, face tracking, crop, and encoding inside the isolated workspace. Do not copy to `app/static/clips/` or upload a batch before the user reviews one sample clip and its caption.
+5. **Separate platform output.** Keep news URLs in the web `captions.json`; YouTube Shorts descriptions must omit external news URLs because Shorts descriptions do not make them clickable.
+6. **Deploy only finalized output.** After approval, copy the workspace's `clips/*.mp4`, `clips.json`, and `captions.json` to `app/static/clips/<podcast>/<episode>/`, restart Flask if needed, and verify both the index and episode URL.
+7. **Clean up deliberately.** Delete the temporary workspace only after upload and web deployment succeed. Preserve a failed workspace for debugging instead of silently overwriting it.
+
+Required command shape:
+
+```bash
+EP=/tmp/podcast-clips/<episode-id>
+PODCAST_WORK_DIR="$EP" python curate.py
+PODCAST_WORK_DIR="$EP" python caption.py
+PODCAST_WORK_DIR="$EP" python cut_smart.py "$EP/source.mp4"
+PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
+```
 
 ## Pipeline (in order)
 
-1. **Download**: `~/.local/bin/yt-dlp -f "bv*[height<=720]+ba/b[height<=720]" --merge-output-format mp4 -o "work/<episode>/epN.%(ext)s" <url>`. If a video file already exists (e.g., downloaded via youtube-content skill), place it in the episode workspace and skip this step.
+1. **Download**: `~/.local/bin/yt-dlp -f "bv*[height<=720]+ba/b[height<=720]" --merge-output-format mp4 -o "/tmp/podcast-clips/<episode-id>/source.%(ext)s" <url>`. If a video file already exists (e.g., downloaded via youtube-content skill), place it in the isolated temp workspace and skip this step.
 2. **Transcribe**: Two options —  
-   - **faster-whisper** (offline, 15+ min for long videos): run with `background=true, notify=true`, model `small`, `int8`, `language="id"`, `vad_filter=True` → `work/<episode>/transcript.json` (`[{start,end,text}]`).
+   - **faster-whisper** (offline, 15+ min for long videos): run with `background=true, notify=true`, model `small`, `int8`, `language="id"`, `vad_filter=True` → `/tmp/podcast-clips/<episode-id>/transcript.json` (`[{start,end,text}]`).
    - **YouTube API transcript** (instant, requires subtitles available): use the youtube-content skill's `fetch_transcript.py --timestamps --text-only --language id,en` for the text, pipe into the conversion script:
      ```
-   PODCAST_TRANSCRIPT_FILE=work/<episode>/transcript.json uv run python /home/isra/.hermes/skills/media/youtube-content/scripts/fetch_transcript.py <URL> --timestamps --text-only --language id,en | uv run python scripts/youtube_transcript_to_segments.py
+   uv run python /home/isra/.hermes/skills/media/youtube-content/scripts/fetch_transcript.py <URL> --timestamps --text-only --language id,en | PODCAST_TRANSCRIPT_FILE=/tmp/podcast-clips/<episode-id>/transcript.json uv run python scripts/youtube_transcript_to_segments.py
      ```
      The script parses `MM:SS text` lines, merges same-timestamp utterances, and estimates end times from the next line's start. Verify segment count and first-line text match the episode before proceeding with curate.
-3. **Curate**: `PODCAST_WORK_DIR=work/<episode> python curate.py <model>` — sends timestamped transcript to a cheap SumoPod LLM, returns 6–12 moments (40–70s, hook-first, standalone, no politics/SARA) → `work/<episode>/clips.json`.
-4. **Cut**: `PODCAST_WORK_DIR=work/<episode> .venv/bin/python cut_smart.py work/<episode>/epN.mp4` — face-tracked 9:16 crop + burned-in ASS subtitles → `work/<episode>/clips/clipNN.mp4`.
-5. **Caption**: Create `work/<episode>/search_results.json` with the top 3 reputable Indonesian news results per clip, then run `PODCAST_WORK_DIR=work/<episode> python caption.py` → `work/<episode>/captions.json`.
+3. **Curate**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python curate.py <model>` — sends timestamped transcript to a cheap SumoPod LLM, returns 6–12 moments (40–70s, hook-first, standalone, no politics/SARA) → `clips.json`.
+4. **Cut**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> .venv/bin/python cut_smart.py /tmp/podcast-clips/<episode-id>/source.mp4` — face-tracked 9:16 crop + burned-in ASS subtitles → `clips/clipNN.mp4`.
+5. **Caption**: Create `/tmp/podcast-clips/<episode-id>/search_results.json` with the top 3 reputable Indonesian news results per clip, then run `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python caption.py` → `captions.json`.
 
 6. **Deliver video + caption TOGETHER, every time**: the user requires the video file (copy to `~/.hermes/cache/scratch/`, then a `MEDIA:/path` line) AND its caption with all 3 related-news links in the SAME chat message.
 
@@ -41,8 +63,8 @@ Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` w
    PODCAST=jelasin-dong
    EP_DIR="2026-09-19_episode-slug"
    mkdir -p ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR
-   cp work/$EPISODE/clips/clip*.mp4 ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
-   cp work/$EPISODE/clips.json work/$EPISODE/captions.json ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
+   cp /tmp/podcast-clips/$EPISODE/clips/clip*.mp4 ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
+   cp /tmp/podcast-clips/$EPISODE/clips.json /tmp/podcast-clips/$EPISODE/captions.json ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
    ```
 
    Restart: `systemctl --user restart flask-app`. Verify: `curl http://localhost:5000/` (index with episode list) and `curl http://localhost:5000/clips/$PODCAST/$EP_DIR` (Shorts viewer).
@@ -76,8 +98,8 @@ Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` w
    - Flask app routes: `/auth` → Google consent screen, `/oauth` → callback saves token to `youtube_token.json`.
    - **YouTube Shorts format**: Append `#Shorts` to every video title so YouTube classifies the vertical 9:16 clip as a Short. Also add `shorts` to the tags array.
    - **Caption whitespace**: Strip leading \n\n from captions before uploading (`description.strip()`) — the caption.py script prefixes them and raw newlines make the YouTube description start with blank lines.
-   - **Update descriptions after upload (MANDATORY)**: After each upload, call `youtube.videos().update()` to write the full description with all 3 news links. The `videos().insert()` call during upload does not reliably embed all metadata. User explicitly rejects descriptions with only 1 link as "tidak lengkap". Always update YouTube descriptions to match the latest `captions.json` — they do not auto-sync.
-   - Upload script at `~/podcast-clips/scripts/youtube_upload.py`: `python scripts/youtube_upload.py <num>` uploads one clip; `python scripts/youtube_upload.py all` uploads all 6.
+   - **YouTube description**: Upload only caption text without external news URLs. News URLs belong in the web gallery because Shorts descriptions make external URLs non-clickable.
+   - Upload script at `~/podcast-clips/scripts/youtube_upload.py`: set `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id>` explicitly, then run `python scripts/youtube_upload.py <num>` for one clip or `python scripts/youtube_upload.py all` for all clips.
    - If token missing or scope insufficient, user opens `https://clips.gcp.my.id/auth` to re-authorize.
    - **Channel mismatch pitfall**: Google accounts can have multiple YouTube channels (main + brand channels). When the user authorizes OAuth in the consent screen, Google shows a channel picker. If they select a different channel than the one used for a previous upload, the new token points to a different channel ID. Uploads still succeed (to the new channel), but metadata updates on old videos fail with `Forbidden`. The fix: delete old videos and re-upload under the correct channel, or re-authorize explicitly selecting the right channel. To verify which channel the current token points to: `youtube.channels().list(part='snippet', mine=True).execute()` — check the returned `channelId`.
    - Credentials reference at `~/.hermes/references/youtube-api-credentials.md`.
@@ -86,7 +108,7 @@ Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` w
    - **Prerequisites**: TikTok Business account, developer app registered at https://developers.tiktok.com, domain verified (TXT DNS record `tiktok-developers-site-verification=<value>` added in Cloudflare DNS), app submitted for review.
    - **OAuth**: App uses PKCE OAuth 2.0. The client key and secret are in `app/config.py`. Routes at `/tiktok-auth` and `/tiktok-oauth`. Redirect URI: `https://clips.gcp.my.id/tiktok-oauth`. Scope: `video.upload`.
    - **Upload script** at `~/podcast-clips/scripts/tiktok_upload.py`: uses the Content Posting API v2. Flow: initialize upload → PUT file to upload_url → POST to inbox. Videos go to `PUBLISH_TO_INBOX` mode — the user must open the TikTok app, check Inbox, and manually post.
-   - **Usage**: `python scripts/tiktok_upload.py <num>` for one clip, `python scripts/tiktok_upload.py all` for all 6.
+   - **Usage**: set `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id>` explicitly, then run `python scripts/tiktok_upload.py <num>` for one clip or `python scripts/tiktok_upload.py all` for all clips.
    - **Token storage**: `~/podcast-clips/app/tiktok_token.json` after successful OAuth.
    - **Domain verification for TikTok**: TikTok requires verifying ownership of the URL prefix (`clips.gcp.my.id`) before the Content Posting API works. Two ways:
      a) **DNS TXT record** (recommended): Add a TXT record for `clips.gcp.my.id` in Cloudflare DNS with value `tiktok-developers-site-verification=<string_from_tiktok>`. Verify with `dig TXT clips.gcp.my.id +short`.
@@ -94,10 +116,10 @@ Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` w
 
 ## Hard rules
 
-- **Never reuse a `transcript.json` or `search_results.json` across episodes.** Keep both inside the relevant `work/<episode>/` directory. After any re-transcribe and re-search, verify segment count and first-line text before running curate/caption.
+- **Never reuse a `transcript.json` or `search_results.json` across episodes.** Keep both inside the relevant `/tmp/podcast-clips/<episode-id>/` directory. After any re-transcribe and re-search, verify segment count and first-line text before running curate/caption.
 - **Long transcribes must run with `background=true, notify=true`.** A 28-min video takes ~25 min on CPU; foreground calls hit the 600s cap.
 - **Update search_results.json BEFORE running caption.py in background.** If you update search_results.json after starting a background caption process, the running process will use the stale data. The caption process reads search_results.json at startup — any writes after that are invisible until re-run.
-- **YouTube descriptions must match captions.json after re-generation.** If captions are re-generated (e.g. to fix links), update all 6–12 YouTube video descriptions immediately via `youtube.videos().update()`. YouTube descriptions do not auto-sync from `captions.json` — they are written once during upload and remain stale until explicitly updated.
+- **YouTube descriptions must not contain external news URLs.** If captions are regenerated, redeploy the web `captions.json`; do not expect YouTube Shorts descriptions to make those URLs clickable.
 - **Deliver ONE sample video + its caption to the user for review before batch-posting anything.** LLM caption quality is ~70% — the user reviews and corrects topic errors; captions are the step that fails, video rarely.
 - **Caption news links must be from reputable Indonesian media** (Tempo, Kompas, CNN Indonesia, MetroTV, IDN Times, RMOL, tribun). User rejects generic analysis sites (windonesia.com, cockatoo.com, suarakita.net) as irrelevant. Filter search_results.json to only include links from trusted sources before running caption.py.
 - **Caption leading whitespace**: The caption.py script prefixes captions with `\n\n`. Strip with `.strip()` before sending messages and before uploading to YouTube. Raw newlines make the first display line blank and look sloppy.

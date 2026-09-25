@@ -5,8 +5,13 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-EP = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(os.environ.get("PODCAST_VIDEO", "work/ep1/ep1.mp4"))
-WORK_DIR = Path(os.environ.get("PODCAST_WORK_DIR", str(EP.parent)))
+if len(sys.argv) < 2:
+    sys.exit("Usage: python cut_smart.py <source-video>")
+EP = Path(sys.argv[1])
+WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
+if not WORK_DIR_VALUE:
+    sys.exit("PODCAST_WORK_DIR is required, e.g. /tmp/podcast-clips/episode-id")
+WORK_DIR = Path(WORK_DIR_VALUE)
 CLIPS_DIR = WORK_DIR / "clips"
 CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 clips = json.load(open(WORK_DIR / "clips.json"))

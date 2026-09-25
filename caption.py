@@ -9,7 +9,10 @@ if not KEY:
         if line.startswith("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY="):
             KEY = line.strip().split("=", 1)[1].strip().strip('"')
 
-WORK_DIR = Path(os.environ.get("PODCAST_WORK_DIR", "work/ep1"))
+WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
+if not WORK_DIR_VALUE:
+    sys.exit("PODCAST_WORK_DIR is required, e.g. /tmp/podcast-clips/episode-id")
+WORK_DIR = Path(WORK_DIR_VALUE)
 WORK_DIR.mkdir(parents=True, exist_ok=True)
 clips = json.load(open(WORK_DIR / "clips.json"))
 segs = json.load(open(WORK_DIR / "transcript.json"))

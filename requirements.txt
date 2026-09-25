@@ -2,3 +2,7 @@ Flask
 requests
 google-auth-oauthlib
 google-api-python-client
+numpy
+scipy
+opencv-python-headless
+faster-whisper
