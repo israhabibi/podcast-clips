@@ -114,7 +114,7 @@ PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
 
 10. **TikTok upload** (after user's TikTok developer app is approved + OAuth authorized): Upload finished clips to TikTok inbox for user review before posting.
    - **Prerequisites**: TikTok Business account, developer app registered at https://developers.tiktok.com, domain verified (TXT DNS record `tiktok-developers-site-verification=<value>` added in Cloudflare DNS), app submitted for review.
-   - **OAuth**: App uses PKCE OAuth 2.0. The client key and secret are in `app/config.py`. Routes at `/tiktok-auth` and `/tiktok-oauth`. Redirect URI: `https://clips.gcp.my.id/tiktok-oauth`. Scope: `video.upload`.
+   - **OAuth**: App uses PKCE OAuth 2.0. The client key and secret are read from env vars (`TIKTOK_CLIENT_KEY`, `TIKTOK_CLIENT_SECRET`) via `app/config.py` — never hardcoded, never committed. Copy `.env.example` to `app/.env` and fill in real values. Routes at `/tiktok-auth` and `/tiktok-oauth`. Redirect URI: `https://clips.gcp.my.id/tiktok-oauth`. Scope: `video.upload`.
    - **Upload script** at `~/podcast-clips/scripts/tiktok_upload.py`: uses the Content Posting API v2. Flow: initialize upload → PUT file to upload_url → POST to inbox. Videos go to `PUBLISH_TO_INBOX` mode — the user must open the TikTok app, check Inbox, and manually post.
    - **Usage**: set `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id>` explicitly, then run `python scripts/tiktok_upload.py <num>` for one clip or `python scripts/tiktok_upload.py all` for all clips.
    - **Token storage**: `~/podcast-clips/app/tiktok_token.json` after successful OAuth.
