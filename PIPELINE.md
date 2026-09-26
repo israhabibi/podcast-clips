@@ -16,16 +16,20 @@ These rules are mandatory for every new episode. Treat this section as the sourc
 3. **Verify source identity before curation.** Confirm the source video exists, record its duration with `ffprobe`, confirm the transcript is non-empty and has valid ordered `start`/`end` fields, and compare the transcript's first spoken text with the first 30 seconds of that same video. Stop if they do not match.
 4. **Keep processing local until review.** Run transcription, LLM curation, caption generation, face tracking, crop, and encoding inside the isolated workspace. Do not copy to `app/static/clips/` or upload a batch before the user reviews one sample clip and its caption.
 5. **Separate platform output.** Keep news URLs in the web `captions.json`; YouTube Shorts descriptions must omit external news URLs because Shorts descriptions do not make them clickable.
-6. **Deploy only finalized output.** After approval, copy the workspace's `clips/*.mp4`, `clips.json`, and `captions.json` to `app/static/clips/<podcast>/<episode>/`, restart Flask if needed, and verify both the index and episode URL.
+6. **Deploy only finalized output.** After approval, copy the workspace's `clips/*.mp4`, `clips.json`, `captions.json`, and `episode_data.json` to `app/static/clips/<podcast>/<episode>/`, restart Flask if needed, and verify both the index and episode URL.
 7. **Clean up deliberately.** Delete the temporary workspace only after upload and web deployment succeed. Preserve a failed workspace for debugging instead of silently overwriting it.
 
 Required command shape:
 
 ```bash
 EP=/tmp/podcast-clips/<episode-id>
-PODCAST_WORK_DIR="$EP" python curate.py
+# 1. Curate — generates episode_data.json + clips.json
+PODCAST_WORK_DIR="$EP" python curate.py <model> <podcast_slug> "<episode_title>"
+# 2. Cut — needs clips.json from curate
+PODCAST_WORK_DIR="$EP" .venv/bin/python cut_smart.py "$EP/source.mp4"
+# 3. Caption — needs search_results.json (create first via web_search) + clips.json from curate
 PODCAST_WORK_DIR="$EP" python caption.py
-PODCAST_WORK_DIR="$EP" python cut_smart.py "$EP/source.mp4"
+# 4. Upload (after user approves sample)
 PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
 ```
 
@@ -39,7 +43,10 @@ PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
    uv run python /home/isra/.hermes/skills/media/youtube-content/scripts/fetch_transcript.py <URL> --timestamps --text-only --language id,en | PODCAST_TRANSCRIPT_FILE=/tmp/podcast-clips/<episode-id>/transcript.json uv run python scripts/youtube_transcript_to_segments.py
      ```
      The script parses `MM:SS text` lines, merges same-timestamp utterances, and estimates end times from the next line's start. Verify segment count and first-line text match the episode before proceeding with curate.
-3. **Curate**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python curate.py <model>` — sends timestamped transcript to a cheap SumoPod LLM, returns 6–12 moments (40–70s, hook-first, standalone, no politics/SARA) → `clips.json`.
+3. **Curate**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python curate.py <model> <podcast_slug> <episode_title>` — one LLM call returns episode summary + X post + 6–12 clip moments → `episode_data.json` + `clips.json`.
+   - `podcast_slug`: jelasin-dong | bocor-alus | tukang-kupas
+   - `episode_title`: original episode title from YouTube RSS (auto-slugified for URL)
+   - `episode_data.json` contains: `episode_summary` (web), `x_post` {text, hashtags} (X hook + link), `clips` array.
 4. **Cut**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> .venv/bin/python cut_smart.py /tmp/podcast-clips/<episode-id>/source.mp4` — face-tracked 9:16 crop + burned-in ASS subtitles → `clips/clipNN.mp4`.
 5. **Caption**: Create `/tmp/podcast-clips/<episode-id>/search_results.json` with the top 3 reputable Indonesian news results per clip, then run `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python caption.py` → `captions.json`.
 
@@ -54,7 +61,8 @@ PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
        └── <YYYY-MM-DD_episode-slug>/   # e.g., 2026-09-19_huru-hara-pencopotan-purbaya
            ├── clip01.mp4 ... clip06.mp4
            ├── captions.json
-           └── clips.json
+           ├── clips.json
+           └── episode_data.json        # episode_summary + x_post + clips metadata
    ```
    Episode folder name = date (from RSS `published` field) + `_` + slugified title. Always create the folder before copying files.
 
@@ -64,12 +72,12 @@ PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
    EP_DIR="2026-09-19_episode-slug"
    mkdir -p ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR
    cp /tmp/podcast-clips/$EPISODE/clips/clip*.mp4 ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
-   cp /tmp/podcast-clips/$EPISODE/clips.json /tmp/podcast-clips/$EPISODE/captions.json ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
+   cp /tmp/podcast-clips/$EPISODE/clips.json /tmp/podcast-clips/$EPISODE/captions.json /tmp/podcast-clips/$EPISODE/episode_data.json ~/podcast-clips/app/static/clips/$PODCAST/$EP_DIR/
    ```
 
-   Restart: `systemctl --user restart flask-app`. Verify: `curl http://localhost:5000/` (index with episode list) and `curl http://localhost:5000/clips/$PODCAST/$EP_DIR` (Shorts viewer).
+   Restart: `systemctl --user restart flask-app`. Verify: `curl http://localhost:5000/` (index with episode list) and `curl http://localhost:5000/clips/$PODCAST/$EP_DIR` (Shorts viewer with episode landing card).
 
-   **Route layout**: `/` renders an index page listing all episodes grouped by podcast. `/clips/<podcast>/<episode>` renders the Shorts-style gallery for that specific episode. Video files are served via `/static/clips/<podcast>/<episode>/<filename>` (a dedicated `send_from_directory` route so Flask finds them in nested dirs). The clips.html template receives `podcast`, `episode`, `captions`, and `clips_meta` variables and constructs video src as `/static/clips/{{ podcast }}/{{ episode }}/{{ filename }}`.
+   **Route layout**: `/` renders an index page listing all episodes grouped by podcast. `/clips/<podcast>/<episode>` renders the Shorts-style gallery with an episode landing card (episode_summary + x_post) at the top before the clips scroll. Video files are served via `/static/clips/<podcast>/<episode>/<filename>` (a dedicated `send_from_directory` route so Flask finds them in nested dirs). The clips.html template receives `podcast`, `episode`, `episode_title`, `episode_summary`, `x_post`, `captions`, and `clips_meta` variables.
 
    **App package structure** (Flask factory pattern):
    `app/__init__.py` (Flask init + ProxyFix), `app/run.py` (entry point), `app/config.py` (API credentials), `app/routes/clips.py` (gallery + terms/privacy), `app/routes/youtube.py` (YouTube OAuth), `app/routes/tiktok.py` (TikTok OAuth), `app/templates/clips.html` (Shorts viewer), `app/templates/index.html` (episode list).
@@ -98,7 +106,7 @@ PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
    - Flask app routes: `/auth` → Google consent screen, `/oauth` → callback saves token to `youtube_token.json`.
    - **YouTube Shorts format**: Append `#Shorts` to every video title so YouTube classifies the vertical 9:16 clip as a Short. Also add `shorts` to the tags array.
    - **Caption whitespace**: Strip leading \n\n from captions before uploading (`description.strip()`) — the caption.py script prefixes them and raw newlines make the YouTube description start with blank lines.
-   - **YouTube description**: Upload only caption text without external news URLs. News URLs belong in the web gallery because Shorts descriptions make external URLs non-clickable.
+   - **YouTube description**: Upload with full caption (including news links). After insert(), call `videos().update()` to write the complete description — insert() alone does not reliably embed all metadata. Strip leading `\n\n` with `.strip()` before passing to the API.
    - Upload script at `~/podcast-clips/scripts/youtube_upload.py`: set `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id>` explicitly, then run `python scripts/youtube_upload.py <num>` for one clip or `python scripts/youtube_upload.py all` for all clips.
    - If token missing or scope insufficient, user opens `https://clips.gcp.my.id/auth` to re-authorize.
    - **Channel mismatch pitfall**: Google accounts can have multiple YouTube channels (main + brand channels). When the user authorizes OAuth in the consent screen, Google shows a channel picker. If they select a different channel than the one used for a previous upload, the new token points to a different channel ID. Uploads still succeed (to the new channel), but metadata updates on old videos fail with `Forbidden`. The fix: delete old videos and re-upload under the correct channel, or re-authorize explicitly selecting the right channel. To verify which channel the current token points to: `youtube.channels().list(part='snippet', mine=True).execute()` — check the returned `channelId`.
@@ -137,13 +145,14 @@ PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
 ## Web gallery: clips.html template
 
 When serving clips via Flask/Bootstrap:
-- **Layout**: YouTube Shorts-style vertical scroll — `100dvh` snap items, `scroll-snap-type: y mandatory`, `overflow-y: scroll`, no scrollbar. Progress dots on the right side (`position: fixed`) link to each clip index.
+- **Layout**: Episode landing card (episode_summary + x_post) as the first snap item (100dvh), followed by YouTube Shorts-style vertical clip scroll. Progress dots on the right side (`position: fixed`) link to each clip index.
+- **Episode header**: podcast badge, episode title, summary paragraph, X post preview (text + web URL), and "Tonton Klip" CTA button that scrolls to the first clip.
 - **Auto-play on scroll**: detect the active item by checking each `.short-item`'s bounding rect midpoint against viewport height. Play the active video, pause all others.
 - **Audio**: browsers block autoplay with sound. Start videos **muted** (HTML `muted` attribute or JS `vid.muted = true`). Provide a mute/unmute toggle button (`.mute-btn` positioned bottom-right of the video wrapper, icon `bi-volume-mute-fill` / `bi-volume-up-fill`). Unmute triggers `vid.play()` as a user-gesture path to unmuted playback.
 - **Never truncate captions** — the news URL at the end (30-60 chars) gets cut off first.
 - **Auto-link URLs** inside captions — split on `https://`, wrap in `<a>` with `target="_blank"`. Use a short label like `🔗 baca selengkapnya` instead of dumping the raw URL.
-- Use `static/clips/` to serve video files + `clips.json` + `captions.json`.
-- Route template reads `captions.json` and `clips.json` from the clips dir.
+- Use `static/clips/` to serve video files + `clips.json` + `captions.json` + `episode_data.json`.
+- Route template reads `captions.json`, `clips.json`, and `episode_data.json` from the clips dir.
 
 ## Scripts
 

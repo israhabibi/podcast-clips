@@ -13,11 +13,6 @@ TOKEN_FILE = Path(os.environ.get("YOUTUBE_TOKEN_FILE", REPO_DIR / "app" / "youtu
 CLIPS_DIR = WORK_DIR / "clips" if WORK_DIR else None
 CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json") if CLIPS_DIR else None
 
-def youtube_description(description):
-    """Keep the caption text but omit external news URLs from YouTube Shorts."""
-    without_urls = re.sub(r"https?://\S+", "", description)
-    return "\n".join(line.rstrip() for line in without_urls.splitlines()).strip()
-
 def upload_clip(video_path, title, description, tags=None):
     if not os.path.exists(TOKEN_FILE):
         return {"error": "Belum OAuth. Buka https://clips.gcp.my.id/auth dulu."}
@@ -27,10 +22,13 @@ def upload_clip(video_path, title, description, tags=None):
     
     youtube = build('youtube', 'v3', credentials=creds)
     
+    # Strip leading newlines from caption (caption.py prefixes them)
+    clean_desc = description.strip()
+    
     body = {
         'snippet': {
             'title': (title + ' #Shorts')[:100],
-            'description': youtube_description(description),
+            'description': clean_desc,
             'tags': tags or ['shorts', 'podcast', 'tempo', 'indonesia'],
             'categoryId': '25'  # News & Politics
         },
@@ -49,8 +47,22 @@ def upload_clip(video_path, title, description, tags=None):
     )
     
     response = request.execute()
+    video_id = response['id']
+    
+    # MANDATORY: update description with full caption (includes news links)
+    # insert() does not reliably embed all metadata
+    youtube.videos().update(
+        part='snippet',
+        body={
+            'id': video_id,
+            'snippet': {
+                'description': clean_desc,
+            }
+        }
+    ).execute()
+    
     return {
-        "video_id": response['id'],
+        "video_id": video_id,
         "url": f"https://youtube.com/watch?v={response['id']}",
         "title": response['snippet']['title']
     }

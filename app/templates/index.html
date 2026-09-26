@@ -38,6 +38,9 @@
                     <div class="flex-grow-1">
                         <h6 class="mb-0">{{ ep.episode_title }}</h6>
                         <small class="text-secondary">{{ ep.date }} · {{ ep.clips_meta|length }} klip</small>
+                        {% if ep.episode_summary %}
+                        <p class="mb-0 mt-1" style="font-size:.75rem;color:#888;line-height:1.4;">{{ ep.episode_summary[:100] }}...</p>
+                        {% endif %}
                     </div>
                     <i class="bi bi-chevron-right text-secondary"></i>
                 </div>

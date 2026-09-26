@@ -18,9 +18,11 @@ def get_episodes():
                 continue
             caps_file = os.path.join(ep_path, 'captions.json')
             clips_file = os.path.join(ep_path, 'clips.json')
+            episode_data_file = os.path.join(ep_path, 'episode_data.json')
             if os.path.exists(caps_file) and os.path.exists(clips_file):
                 caps = json.load(open(caps_file))
                 clips_meta = json.load(open(clips_file))
+                episode_data = json.load(open(episode_data_file)) if os.path.exists(episode_data_file) else {}
                 ep_title = ep.split('_', 1)[1] if '_' in ep else ep
                 ep_title = ep_title.replace('-', ' ').title()
                 episodes.append({
@@ -30,6 +32,8 @@ def get_episodes():
                     'date': ep.split('_')[0] if '_' in ep else '',
                     'captions': caps,
                     'clips_meta': clips_meta,
+                    'episode_summary': episode_data.get('episode_summary', ''),
+                    'x_post': episode_data.get('x_post', {}),
                 })
     return episodes
 
@@ -45,17 +49,23 @@ def clips_view(podcast=None, episode=None):
         ep_path = os.path.join(CLIPS_DIR, podcast, episode)
         caps_file = os.path.join(ep_path, 'captions.json')
         clips_file = os.path.join(ep_path, 'clips.json')
+        episode_data_file = os.path.join(ep_path, 'episode_data.json')
         if os.path.exists(caps_file) and os.path.exists(clips_file):
             caps = json.load(open(caps_file))
             clips_meta = json.load(open(clips_file))
+            episode_data = json.load(open(episode_data_file)) if os.path.exists(episode_data_file) else {}
             return render_template('clips.html', captions=caps, clips_meta=clips_meta,
-                                   podcast=podcast, episode=episode)
+                                   podcast=podcast, episode=episode,
+                                   episode_summary=episode_data.get('episode_summary', ''),
+                                   x_post=episode_data.get('x_post', {}))
     episodes = get_episodes()
     if episodes:
         ep = episodes[0]
         return render_template('clips.html', captions=ep['captions'],
                                clips_meta=ep['clips_meta'],
-                               podcast=ep['podcast'], episode=ep['episode'])
+                               podcast=ep['podcast'], episode=ep['episode'],
+                               episode_summary=ep.get('episode_summary', ''),
+                               x_post=ep.get('x_post', {}))
     return 'Belum ada klip.'
 
 @app.route('/static/clips/<podcast>/<episode>/<filename>')

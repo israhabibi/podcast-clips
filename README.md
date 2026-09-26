@@ -8,7 +8,7 @@ Clipping & auto-upload system for Tempo podcast episodes (Jelasin Dong!, Bocor A
 podcast-clips/
 ├── app/                   # Flask web app (clips.gcp.my.id)
 │   ├── __init__.py
-│   ├── app.py             # Entry point
+│   ├── run.py              # Entry point
 │   ├── config.py          # OAuth credentials & config
 │   ├── routes/
 │   │   ├── clips.py       # Gallery YouTube-Shorts style
@@ -22,7 +22,7 @@ podcast-clips/
 │   ├── ep1/               # Source video, transcript, metadata, subtitles, clips
 │   ├── ep2/
 │   └── ai-tutorial/
-├── curate.py              # LLM-based moment selection
+├── curate.py              # LLM: episode summary + x_post + moment selection
 ├── cut_smart.py           # Face-track 9:16 crop + subtitles
 ├── caption.py             # LLM caption + news links
 ├── monitor.py             # RSS monitor (3 playlists)
@@ -35,7 +35,7 @@ podcast-clips/
 1. **Monitor** — `monitor.py` cek RSS 3 playlist Tempo tiap hari
 2. **Download** — simpan source video ke `/tmp/podcast-clips/<episode-id>/`
 3. **Transcribe** — tulis segments JSON ke `/tmp/podcast-clips/<episode-id>/transcript.json`
-4. **Curate** — SumoPod LLM pilih 6–12 momen terbaik
+4. **Curate** — SumoPod LLM: episode summary + X post + 6–12 momen terbaik → `episode_data.json` + `clips.json`
 5. **Cut** — Face-track 9:16 + subtitle burn-in ke `/tmp/podcast-clips/<episode-id>/clips/`
 6. **Caption** — LLM generate caption + search berita terkait di folder episode
 7. **Deploy** — Copy ke Flask static + restart
@@ -49,7 +49,7 @@ podcast-clips/
 | Download | `yt-dlp` | CPU lokal + network YouTube | Video di `/tmp/podcast-clips/<episode-id>/` |
 | Transcribe | faster-whisper | CPU lokal, cukup berat dan lama | `transcript.json` |
 | Transcribe alternatif | YouTube transcript API | YouTube API, hampir tanpa beban CPU | `transcript.json` |
-| Curate | `curate.py` | LLM SumoPod/API | `clips.json`, 6–12 momen |
+| Curate | `curate.py` | LLM SumoPod/API | `episode_data.json` (summary + x_post + clips), `clips.json` |
 | Cut dan reframe | `cut_smart.py` + OpenCV + FFmpeg | CPU lokal, tahap paling berat | Video 9:16 di `clips/` |
 | Caption | `caption.py` | LLM SumoPod/API + data search | `captions.json` |
 | Web gallery | Flask | CPU/server lokal | `clips.gcp.my.id` |
