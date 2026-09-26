@@ -105,6 +105,37 @@ cp .env.example app/.env
 # Edit app/.env dengan OAuth keys yang sesuai
 ```
 
+## Branch Protection
+
+Push langsung ke `main` diblokir oleh pre-push hook lokal. Gunakan Pull Request workflow:
+
+```bash
+# 1. Buat branch baru
+git checkout -b fix/nama-perbaikan
+
+# 2. Commit perubahan
+git add .
+git commit -m "fix: deskripsi perbaikan"
+
+# 3. Push branch
+git push origin fix/nama-perbaikan
+
+# 4. Buat Pull Request di GitHub
+#    Buka https://github.com/israhabibi/podcast-clips
+#    Klik "Compare & pull request"
+#    Isi deskripsi, klik "Create pull request"
+
+# 5. Merge via GitHub UI setelah review
+```
+
+Untuk proteksi tambahan di sisi server, aktifkan Branch Protection Rules di:
+**GitHub > Repo > Settings > Branches > Add branch protection rule >**
+- Branch: `main`
+- ✅ Require pull request before merging
+- ✅ Dismiss stale pull request approvals
+- ✅ Require branches to be up-to-date
+- ✅ Do not allow bypassing the above settings
+
 ## Biaya per Episode
 
 **Model: MiniMax-M2.7-highspeed (SumoPod)**
