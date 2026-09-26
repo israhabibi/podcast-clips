@@ -58,10 +58,15 @@ def upload_clip(video_path, caption, idx):
 
     # 3. Post to inbox
     post_url = f"{API_BASE}/post/publish/inbox/video/post/"
+    
+    # Truncate caption safely (respect UTF-8 boundaries)
+    cap_bytes = caption.encode('utf-8')[:2200]
+    caption_truncated = cap_bytes.decode('utf-8', errors='ignore')
+    
     post_body = {
         "publish_id": publish_id,
         "post_mode": "PUBLISH_TO_INBOX",  # user reviews & posts
-        "caption": caption[:2200],
+        "caption": caption_truncated,
         "disable_duet": False,
         "disable_comment": False,
         "disable_stitch": False,

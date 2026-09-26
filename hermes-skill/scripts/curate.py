@@ -5,9 +5,12 @@ from pathlib import Path
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
 if not KEY:
-    for line in open(os.path.expanduser("~/.hermes/.env")):
-        if line.startswith("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY="):
-            KEY = line.strip().split("=", 1)[1].strip().strip('"')
+    hermes_env = os.path.expanduser("~/.hermes/.env")
+    if os.path.exists(hermes_env):
+        with open(hermes_env) as f:
+            for line in f:
+                if line.startswith("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY="):
+                    KEY = line.strip().split("=", 1)[1].strip().strip('"')
 if not KEY:
     sys.exit("API key not found")
 
@@ -25,7 +28,8 @@ PODCAST_SLUG = sys.argv[2] if len(sys.argv) > 2 else "unknown"
 EPISODE_TITLE_RAW = sys.argv[3] if len(sys.argv) > 3 else "episode"
 EPISODE_SLUG = re.sub(r'[^a-z0-9]+', '-', EPISODE_TITLE_RAW.lower()).strip('-')
 
-segs = json.load(open(WORK_DIR / "transcript.json"))
+with open(WORK_DIR / "transcript.json") as f:
+    segs = json.load(f)
 
 # buat transkrip bertimestamp (per ~30s chunk biar ringkas)
 lines = []
@@ -75,7 +79,13 @@ req = urllib.request.Request(
     }).encode(),
     headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
 )
-resp = json.load(urllib.request.urlopen(req, timeout=300))
+try:
+    resp = json.load(urllib.request.urlopen(req, timeout=300))
+except urllib.error.URLError as e:
+    sys.exit(f"LLM request failed: {e}")
+except json.JSONDecodeError as e:
+    sys.exit(f"LLM response not valid JSON: {e}")
+
 content = resp["choices"][0]["message"]["content"].strip()
 # Extract JSON object (may be wrapped in ``` or just raw)
 try:
@@ -84,7 +94,7 @@ try:
     end = content.rindex('}') + 1
     content = content[start:end]
     data = json.loads(content)
-except ValueError:
+except (ValueError, json.JSONDecodeError):
     sys.exit(f"Failed to parse JSON from LLM response: {content[:200]}")
 
 episode_summary = data.get("episode_summary", "")
@@ -107,10 +117,12 @@ episode_data = {
     "x_post": x_post,
     "clips": clips,
 }
-json.dump(episode_data, open(WORK_DIR / "episode_data.json", "w"), ensure_ascii=False, indent=2)
+with open(WORK_DIR / "episode_data.json", "w") as f:
+    json.dump(episode_data, f, ensure_ascii=False, indent=2)
 
 # Also write clips.json for cut_smart.py backward compat
-json.dump(clips, open(WORK_DIR / "clips.json", "w"), ensure_ascii=False, indent=2)
+with open(WORK_DIR / "clips.json", "w") as f:
+    json.dump(clips, f, ensure_ascii=False, indent=2)
 
 print(f"episode_summary: {episode_summary[:80]}...")
 print(f"x_post: {x_post['text'][:60]}")

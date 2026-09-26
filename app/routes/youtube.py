@@ -27,12 +27,19 @@ def youtube_auth():
 
 @app.route('/oauth')
 def youtube_oauth_callback():
+    # Validate state before proceeding (CSRF protection)
+    stored_state = session.get('oauth_state')
+    returned_state = request.args.get('state')
+    if not stored_state or not returned_state or stored_state != returned_state:
+        return '❌ State mismatch. Possible CSRF attack.', 400
+
     flow = google_auth_oauthlib.flow.Flow.from_client_config(CLIENT_CONFIG, scopes=YOUTUBE_SCOPES,
-                                                               state=session.get('oauth_state'))
+                                                               state=stored_state)
     flow.code_verifier = session.get('code_verifier')
     flow.redirect_uri = YOUTUBE_REDIRECT
     flow.fetch_token(authorization_response=request.url)
     creds = flow.credentials
     with open(YOUTUBE_TOKEN_FILE, 'w') as f:
         f.write(creds.to_json())
+    os.chmod(YOUTUBE_TOKEN_FILE, 0o600)
     return '✅ YouTube OAuth berhasil! Token tersimpan. Tutup tab ini.'

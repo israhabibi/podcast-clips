@@ -3,6 +3,22 @@ from flask import render_template, send_from_directory
 import json, os
 from app import app, CLIPS_DIR
 
+ALLOWED_PODCASTS = {'jelasin-dong', 'bocor-alus', 'tukang-kupas'}
+
+def _safe_path(*parts):
+    """Ensure path components are safe (no traversal) and join them."""
+    for p in parts:
+        if not p or '..' in p or '/' in p or os.path.isabs(p):
+            return None
+    return os.path.join(CLIPS_DIR, *parts)
+
+def _load_json(path):
+    """Safely load a JSON file with context manager."""
+    if not os.path.exists(path):
+        return None
+    with open(path) as f:
+        return json.load(f)
+
 def get_episodes():
     """Scan clips dir for podcast/episode structure."""
     episodes = []
@@ -16,25 +32,25 @@ def get_episodes():
             ep_path = os.path.join(podcast_path, ep)
             if not os.path.isdir(ep_path):
                 continue
-            caps_file = os.path.join(ep_path, 'captions.json')
-            clips_file = os.path.join(ep_path, 'clips.json')
-            episode_data_file = os.path.join(ep_path, 'episode_data.json')
-            if os.path.exists(caps_file) and os.path.exists(clips_file):
-                caps = json.load(open(caps_file))
-                clips_meta = json.load(open(clips_file))
-                episode_data = json.load(open(episode_data_file)) if os.path.exists(episode_data_file) else {}
-                ep_title = ep.split('_', 1)[1] if '_' in ep else ep
-                ep_title = ep_title.replace('-', ' ').title()
-                episodes.append({
-                    'podcast': podcast,
-                    'episode': ep,
-                    'episode_title': ep_title,
-                    'date': ep.split('_')[0] if '_' in ep else '',
-                    'captions': caps,
-                    'clips_meta': clips_meta,
-                    'episode_summary': episode_data.get('episode_summary', ''),
-                    'x_post': episode_data.get('x_post', {}),
-                })
+            if '..' in ep or '/' in ep:
+                continue
+            caps = _load_json(os.path.join(ep_path, 'captions.json'))
+            clips_meta = _load_json(os.path.join(ep_path, 'clips.json'))
+            episode_data = _load_json(os.path.join(ep_path, 'episode_data.json')) or {}
+            if caps is None or clips_meta is None:
+                continue
+            ep_title = ep.split('_', 1)[1] if '_' in ep else ep
+            ep_title = ep_title.replace('-', ' ').title()
+            episodes.append({
+                'podcast': podcast,
+                'episode': ep,
+                'episode_title': ep_title,
+                'date': ep.split('_')[0] if '_' in ep else '',
+                'captions': caps,
+                'clips_meta': clips_meta,
+                'episode_summary': episode_data.get('episode_summary', ''),
+                'x_post': episode_data.get('x_post', {}),
+            })
     return episodes
 
 @app.route('/')
@@ -46,14 +62,16 @@ def index():
 @app.route('/clips/<podcast>/<episode>')
 def clips_view(podcast=None, episode=None):
     if podcast and episode:
-        ep_path = os.path.join(CLIPS_DIR, podcast, episode)
-        caps_file = os.path.join(ep_path, 'captions.json')
-        clips_file = os.path.join(ep_path, 'clips.json')
-        episode_data_file = os.path.join(ep_path, 'episode_data.json')
-        if os.path.exists(caps_file) and os.path.exists(clips_file):
-            caps = json.load(open(caps_file))
-            clips_meta = json.load(open(clips_file))
-            episode_data = json.load(open(episode_data_file)) if os.path.exists(episode_data_file) else {}
+        # Validate podcast slug
+        if podcast not in ALLOWED_PODCASTS:
+            return 'Podcast not found', 404
+        ep_path = _safe_path(podcast, episode)
+        if not ep_path or not os.path.isdir(ep_path):
+            return 'Episode not found', 404
+        caps = _load_json(os.path.join(ep_path, 'captions.json'))
+        clips_meta = _load_json(os.path.join(ep_path, 'clips.json'))
+        episode_data = _load_json(os.path.join(ep_path, 'episode_data.json')) or {}
+        if caps and clips_meta:
             return render_template('clips.html', captions=caps, clips_meta=clips_meta,
                                    podcast=podcast, episode=episode,
                                    episode_summary=episode_data.get('episode_summary', ''),
@@ -70,6 +88,10 @@ def clips_view(podcast=None, episode=None):
 
 @app.route('/static/clips/<podcast>/<episode>/<filename>')
 def serve_clip(podcast, episode, filename):
+    # Path traversal protection
+    for part in (podcast, episode, filename):
+        if not part or '..' in part or '/' in part or os.path.isabs(part):
+            return 'Invalid path', 400
     return send_from_directory(os.path.join(CLIPS_DIR, podcast, episode), filename)
 
 @app.route('/terms')

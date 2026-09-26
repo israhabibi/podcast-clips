@@ -13,7 +13,7 @@ TOKEN_FILE = Path(os.environ.get("YOUTUBE_TOKEN_FILE", REPO_DIR / "app" / "youtu
 CLIPS_DIR = WORK_DIR / "clips" if WORK_DIR else None
 CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json") if CLIPS_DIR else None
 
-def upload_clip(video_path, title, description, tags=None):
+def upload_clip(video_path, title, description, tags=None, category_id='25'):
     if not os.path.exists(TOKEN_FILE):
         return {"error": "Belum OAuth. Buka https://clips.gcp.my.id/auth dulu."}
     
@@ -24,13 +24,15 @@ def upload_clip(video_path, title, description, tags=None):
     
     # Strip leading newlines from caption (caption.py prefixes them)
     clean_desc = description.strip()
+    clean_title = (title + ' #Shorts')[:100]
+    default_tags = tags or ['shorts', 'podcast', 'tempo', 'indonesia']
     
     body = {
         'snippet': {
-            'title': (title + ' #Shorts')[:100],
+            'title': clean_title,
             'description': clean_desc,
-            'tags': tags or ['shorts', 'podcast', 'tempo', 'indonesia'],
-            'categoryId': '25'  # News & Politics
+            'tags': default_tags,
+            'categoryId': category_id  # '25' = News & Politics
         },
         'status': {
             'privacyStatus': 'public',
@@ -49,22 +51,24 @@ def upload_clip(video_path, title, description, tags=None):
     response = request.execute()
     video_id = response['id']
     
-    # MANDATORY: update description with full caption (includes news links)
-    # insert() does not reliably embed all metadata
+    # MANDATORY: update with full metadata (insert() does not reliably embed all metadata)
     youtube.videos().update(
         part='snippet',
         body={
             'id': video_id,
             'snippet': {
+                'title': clean_title,
                 'description': clean_desc,
+                'tags': default_tags,
+                'categoryId': category_id,
             }
         }
     ).execute()
     
     return {
         "video_id": video_id,
-        "url": f"https://youtube.com/watch?v={response['id']}",
-        "title": response['snippet']['title']
+        "url": f"https://youtube.com/watch?v={video_id}",
+        "title": clean_title
     }
 
 if __name__ == '__main__':
@@ -80,7 +84,8 @@ if __name__ == '__main__':
         print("ERROR: Belum OAuth. Buka https://clips.gcp.my.id/auth")
         sys.exit(1)
     
-    caps = json.load(open(CAPTIONS_FILE))
+    with open(CAPTIONS_FILE) as f:
+        caps = json.load(f)
     
     if sys.argv[1] == 'all':
         for idx in sorted(caps.keys(), key=int):

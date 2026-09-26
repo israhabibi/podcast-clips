@@ -43,4 +43,5 @@ def tiktok_oauth_callback():
     token_data = r.json()
     with open(TIKTOK_TOKEN_FILE, 'w') as f:
         json.dump(token_data, f, indent=2)
+    os.chmod(TIKTOK_TOKEN_FILE, 0o600)
     return '✅ TikTok OAuth berhasil! Token tersimpan. Tutup tab ini.'
