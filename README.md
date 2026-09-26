@@ -104,3 +104,21 @@ cp -r hermes-skill ~/.hermes/skills/media/podcast-clipping
 cp .env.example app/.env
 # Edit app/.env dengan OAuth keys yang sesuai
 ```
+
+## Biaya per Episode
+
+**Model: MiniMax-M2.7-highspeed (SumoPod)**
+
+Contoh biaya untuk 1 episode (6 clips, ~945 transcript segments, 6 caption search + generate):
+
+| Tahap | Token (input) | Token (output) | Biaya |
+|-------|------------:|------------:|------:|
+| Curate (summary + clips) | ~3.2M | ~25K | ~$0.09 |
+| Caption (6 clips + search) | ~120K | ~5K | ~$0.01 |
+| **Total per episode** | **~3.35M** | **~30K** | **~$0.10 ≈ Rp 1.800** |
+
+Ringkasan: **~Rp 1.800 per episode** (6 Shorts) — 1 clip ≈ Rp 300.
+
+## Twitter / X Promo
+
+X post (hook + link web gallery) di-generate otomatis oleh `curate.py` dan disimpan di `episode_data.json`. Posting manual — belum ada auto-post API (X API berbayar $100/mo).
