@@ -11,7 +11,7 @@ WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
 WORK_DIR = Path(WORK_DIR_VALUE) if WORK_DIR_VALUE else None
 TOKEN_FILE = Path(os.environ.get("YOUTUBE_TOKEN_FILE", REPO_DIR / "app" / "youtube_token.json"))
 CLIPS_DIR = WORK_DIR / "clips" if WORK_DIR else None
-CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json") if CLIPS_DIR else None
+CAPTIONS_FILE = os.path.join(WORK_DIR, "captions.json") if WORK_DIR else None
 
 def upload_clip(video_path, title, description, tags=None, category_id='25'):
     if not os.path.exists(TOKEN_FILE):
