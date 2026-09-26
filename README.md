@@ -83,3 +83,24 @@ PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python scripts/tiktok_upload.py
 ```
 
 Ganti `work/<episode>` dengan `/tmp/podcast-clips/<episode-id>` untuk episode baru. Token OAuth tetap tersimpan di `app/`.
+
+## Replicate di mesin baru
+
+```bash
+# Clone repo
+git clone https://github.com/israhabibi/podcast-clips.git
+cd podcast-clips
+
+# Setup venv
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
+
+# Install skill
+mkdir -p ~/.hermes/skills/media/
+cp -r hermes-skill ~/.hermes/skills/media/podcast-clipping
+
+# Setup credentials
+cp .env.example app/.env
+# Edit app/.env dengan OAuth keys yang sesuai
+```
