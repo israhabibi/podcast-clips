@@ -2,6 +2,7 @@
 from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
 import os
+from datetime import timedelta
 
 SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
 if not SECRET_KEY:
@@ -11,6 +12,13 @@ if not SECRET_KEY:
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+app.config.update(
+    SESSION_COOKIE_HTTPONLY=True,
+    SESSION_COOKIE_SAMESITE="Lax",
+    SESSION_COOKIE_SECURE=os.environ.get("SESSION_COOKIE_SECURE", "true").lower() == "true",
+    PERMANENT_SESSION_LIFETIME=timedelta(hours=8),
+    MAX_CONTENT_LENGTH=16 * 1024,
+)
 app.wsgi_app = ProxyFix(app.wsgi_app, x_proto=1, x_host=1)
 
 CLIPS_DIR = os.path.join(app.static_folder, 'clips')

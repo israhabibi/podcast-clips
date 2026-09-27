@@ -100,4 +100,6 @@ def terms():
 
 @app.route('/privacy')
 def privacy():
-    return '<h1>Privacy Policy</h1><p>No user data collected.</p>'
+    return ('<h1>Privacy Policy</h1><p>The admin service stores login attempts, submitted '
+            'YouTube links, and OAuth tokens on the server to operate the clipping workflow. '
+            'These records are not exposed in the public gallery.</p>')

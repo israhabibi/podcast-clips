@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Admin login - Podcast Clips</title>
+    <style>
+        :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+        body { margin: 0; min-height: 100vh; display: grid; place-items: center; background: #111; color: #f5f5f5; }
+        main { width: min(420px, calc(100% - 32px)); padding: 30px; background: #1c1c1c; border: 1px solid #383838; border-radius: 14px; box-sizing: border-box; }
+        h1 { margin: 0 0 8px; font-size: 1.6rem; }
+        p { color: #aaa; margin: 0 0 24px; }
+        label { display: block; margin-bottom: 8px; }
+        input { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #555; border-radius: 8px; background: #101010; color: white; font: inherit; }
+        button { width: 100%; margin-top: 18px; padding: 12px; border: 0; border-radius: 8px; background: #df3030; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+        .error { padding: 10px; margin-bottom: 16px; border-radius: 8px; background: #592222; }
+        a { display: inline-block; margin-top: 20px; color: #aaa; }
+    </style>
+</head>
+<body>
+    <main>
+        <h1>Podcast Clips admin</h1>
+        <p>Sign in to connect accounts and add an episode link.</p>
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="{{ category }}" role="alert">{{ message }}</div>
+        {% endfor %}
+        <form method="post" action="{{ url_for('admin_login') }}">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="password">Admin password</label>
+            <input id="password" type="password" name="password" required autofocus autocomplete="current-password">
+            <button type="submit">Sign in</button>
+        </form>
+        <a href="{{ url_for('index') }}">Back to clips</a>
+    </main>
+</body>
+</html>

@@ -11,6 +11,7 @@ __pycache__/
 credentials/
 *_token.json
 app/youtube_token.json
+app/data/
 
 # Source media and rendered clips
 *.mp4

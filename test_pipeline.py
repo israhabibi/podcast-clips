@@ -14,6 +14,7 @@ Cakupan:
 """
 
 import sys, os, json, tempfile, unittest, logging
+import subprocess
 from pathlib import Path
 from io import StringIO
 
@@ -70,7 +71,7 @@ class TestImports(unittest.TestCase):
         self.assertTrue(app.static_folder)
 
     def test_routes_import(self):
-        from app.routes import clips, youtube, tiktok
+        from app.routes import clips, youtube, tiktok, admin
         self.assertTrue(hasattr(clips, 'index'))
 
     def test_scripts_import(self):
@@ -96,7 +97,7 @@ class TestFlaskApp(unittest.TestCase):
         app.config['SERVER_NAME'] = 'localhost'
         cls.client = app.test_client()
         # Import routes so they register
-        from app.routes import clips, youtube, tiktok
+        from app.routes import clips, youtube, tiktok, admin
         cls.app = app
 
     def test_index_returns_200(self):
@@ -135,40 +136,35 @@ class TestFlaskApp(unittest.TestCase):
         self.assertEqual(r.status_code, 404)
 
     def test_oauth_auth_route(self):
-        with self.app.test_request_context():
-            from flask import session
-            with self.client as c:
-                r = c.get('/auth')
-                # Should redirect to Google
-                self.assertIn(r.status_code, (302, 500))  # 500 if no real creds
+        r = self.client.get('/auth')
+        self.assertEqual(r.status_code, 302)
+        self.assertIn('/admin/login', r.headers['Location'])
     
-    def test_oauth_callback_no_state(self):
+    def test_oauth_callback_requires_admin(self):
         r = self.client.get('/oauth?code=test&state=wrong')
-        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.status_code, 403)
 
 
 class TestAppInit(unittest.TestCase):
     """Test 3: app/__init__.py behavior."""
 
     def test_secret_key_from_env(self):
-        # Reset module state
-        if 'app' in sys.modules:
-            del sys.modules['app']
-        os.environ['FLASK_SECRET_KEY'] = 'fixed-secret-for-test'
-        from app import app as app1
-        self.assertEqual(app1.secret_key, 'fixed-secret-for-test')
+        env = os.environ.copy()
+        env['FLASK_SECRET_KEY'] = 'fixed-secret-for-test'
+        result = subprocess.run(
+            [sys.executable, '-c', 'from app import app; print(app.secret_key)'],
+            cwd=REPO_DIR, env=env, capture_output=True, text=True, check=True,
+        )
+        self.assertEqual(result.stdout.strip(), 'fixed-secret-for-test')
 
     def test_secret_key_fallback_random(self):
-        if 'app' in sys.modules:
-            del sys.modules['app']
-        # Remove env var to trigger random fallback
-        saved = os.environ.pop('FLASK_SECRET_KEY', None)
-        try:
-            from app import app as app2
-            self.assertTrue(len(app2.secret_key) > 0)
-        finally:
-            if saved:
-                os.environ['FLASK_SECRET_KEY'] = saved
+        env = os.environ.copy()
+        env.pop('FLASK_SECRET_KEY', None)
+        result = subprocess.run(
+            [sys.executable, '-c', 'from app import app; print(len(app.secret_key))'],
+            cwd=REPO_DIR, env=env, capture_output=True, text=True, check=True,
+        )
+        self.assertGreater(int(result.stdout.strip()), 0)
 
 
 class TestCurateScript(unittest.TestCase):
