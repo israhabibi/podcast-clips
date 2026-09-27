@@ -103,6 +103,10 @@ class TestFlaskApp(unittest.TestCase):
     def test_index_returns_200(self):
         r = self.client.get('/')
         self.assertIn(r.status_code, (200, 404))  # 404 if no clips dir
+
+    def test_pipeline_trigger_is_not_public(self):
+        response = self.client.post('/trigger', data={'youtube_url': 'https://youtu.be/abcdefghijk'})
+        self.assertEqual(response.status_code, 404)
     
     def test_terms_returns_200(self):
         r = self.client.get('/terms')
