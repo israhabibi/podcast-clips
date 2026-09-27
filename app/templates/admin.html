@@ -1,0 +1,123 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Admin - Podcast Clips</title>
+    <style>
+        :root { color-scheme: dark; font-family: system-ui, sans-serif; }
+        body { margin: 0; background: #111; color: #f5f5f5; }
+        header, main { max-width: 940px; margin: auto; padding: 20px; }
+        header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+        h1 { font-size: 1.8rem; margin: 12px 0 4px; }
+        h2 { font-size: 1.2rem; margin: 0 0 16px; }
+        p { color: #aaa; line-height: 1.5; }
+        a { color: #ff7777; }
+        button, .button { display: inline-block; padding: 10px 15px; border: 0; border-radius: 8px; background: #df3030; color: white; text-decoration: none; font: inherit; font-weight: 700; cursor: pointer; }
+        button.secondary { background: #333; }
+        .top-actions { display: flex; gap: 12px; align-items: center; }
+        .top-actions form { margin: 0; }
+        .card { background: #1c1c1c; border: 1px solid #383838; border-radius: 14px; padding: 24px; margin-bottom: 20px; }
+        .accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
+        .account { border: 1px solid #444; border-radius: 10px; padding: 18px; }
+        .account h3 { margin: 0 0 8px; }
+        .account p { margin: 0 0 16px; }
+        .status { display: inline-block; margin-bottom: 12px; padding: 3px 9px; border-radius: 20px; background: #333; font-size: .82rem; }
+        .connected { background: #205a38; }
+        label { display: block; margin: 14px 0 6px; font-weight: 600; }
+        input, select { width: 100%; box-sizing: border-box; padding: 11px; border: 1px solid #555; border-radius: 8px; background: #101010; color: white; font: inherit; }
+        .notice { margin-bottom: 20px; padding: 12px; border-radius: 8px; background: #264b32; }
+        .notice.error { background: #592222; }
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; }
+        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #383838; vertical-align: top; }
+        th { color: #aaa; font-size: .85rem; }
+        small { color: #aaa; }
+        @media (max-width: 600px) { header { align-items: flex-start; } .top-actions { flex-direction: column; align-items: flex-end; } }
+    </style>
+</head>
+<body>
+    <header>
+        <div>
+            <h1>Podcast Clips admin</h1>
+            <small>Account connections and episode links</small>
+        </div>
+        <div class="top-actions">
+            <a href="{{ url_for('index') }}">View clips</a>
+            <form method="post" action="{{ url_for('admin_logout') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <button class="secondary" type="submit">Sign out</button>
+            </form>
+        </div>
+    </header>
+    <main>
+        {% for category, message in get_flashed_messages(with_categories=true) %}
+            <div class="notice {{ category }}" role="status">{{ message }}</div>
+        {% endfor %}
+
+        <section class="card">
+            <h2>Connect upload accounts</h2>
+            <div class="accounts">
+                <div class="account">
+                    <h3>YouTube</h3>
+                    <span class="status {{ 'connected' if youtube_connected else '' }}">{{ 'Token saved' if youtube_connected else 'Not connected' }}</span>
+                    <p>Authorize the channel used for Shorts uploads.</p>
+                    {% if youtube_ready %}
+                        <a class="button" href="{{ url_for('youtube_auth') }}">{{ 'Reconnect YouTube' if youtube_connected else 'Connect YouTube' }}</a>
+                    {% else %}
+                        <small>Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET first.</small>
+                    {% endif %}
+                </div>
+                <div class="account">
+                    <h3>TikTok</h3>
+                    <span class="status {{ 'connected' if tiktok_connected else '' }}">{{ 'Token saved' if tiktok_connected else 'Not connected' }}</span>
+                    <p>Authorize the account used for inbox uploads.</p>
+                    {% if tiktok_ready %}
+                        <a class="button" href="{{ url_for('tiktok_auth') }}">{{ 'Reconnect TikTok' if tiktok_connected else 'Connect TikTok' }}</a>
+                    {% else %}
+                        <small>Set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET first.</small>
+                    {% endif %}
+                </div>
+            </div>
+        </section>
+
+        <section class="card">
+            <h2>Add a YouTube episode</h2>
+            <p>This saves the link to a local pending queue for the podcast pipeline. It does not start rendering or publish a clip.</p>
+            <form method="post" action="{{ url_for('admin_add_youtube_link') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                <label for="url">YouTube video link</label>
+                <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+                <label for="podcast">Podcast</label>
+                <select id="podcast" name="podcast" required>
+                    {% for podcast in podcasts %}<option value="{{ podcast }}">{{ podcast }}</option>{% endfor %}
+                </select>
+                <label for="title">Episode title <small>(optional)</small></label>
+                <input id="title" name="title" type="text" maxlength="200" placeholder="Add a title if you know it">
+                <button type="submit" style="margin-top:18px">Add to queue</button>
+            </form>
+        </section>
+
+        <section class="card">
+            <h2>Recent submissions</h2>
+            {% if submissions %}
+                <div class="table-wrap"><table>
+                    <thead><tr><th>Submitted</th><th>Podcast / title</th><th>Video</th><th>Status</th></tr></thead>
+                    <tbody>
+                        {% for item in submissions %}
+                            <tr>
+                                <td><small>{{ item.created_at[:16].replace('T', ' ') }} UTC</small></td>
+                                <td>{{ item.podcast }}{% if item.title %}<br><small>{{ item.title }}</small>{% endif %}</td>
+                                <td><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.video_id }}</a></td>
+                                <td>{{ item.status }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table></div>
+            {% else %}
+                <p>No links submitted yet.</p>
+            {% endif %}
+        </section>
+    </main>
+</body>
+</html>

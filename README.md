@@ -75,6 +75,41 @@ source .venv/bin/activate
 uv pip install -r requirements.txt
 ```
 
+### Admin page
+
+The Flask app has a password-protected `/admin` page for connecting YouTube/TikTok upload accounts and submitting a YouTube episode URL. Set these environment variables in the service or shell that starts `app/run.py`:
+
+```bash
+# Generate a password hash and a session secret with Python on the server.
+python -c 'from werkzeug.security import generate_password_hash; import getpass; print(generate_password_hash(getpass.getpass("Admin password: ")))'
+python -c 'import secrets; print(secrets.token_urlsafe(48))'
+```
+
+Assign the outputs to `ADMIN_PASSWORD_HASH` and `FLASK_SECRET_KEY`. Keep both private and persistent across restarts. Configure the existing YouTube/TikTok OAuth variables in `.env.example` in the same environment. Copying `.env.example` alone does not load it into the process. Use absolute token-file paths if the web app and upload scripts have different working directories. HTTPS deployments should keep `SESSION_COOKIE_SECURE=true` (the default); for local HTTP testing set it to `false`.
+
+For a shell session, export the values before starting the app (keep the hash in single quotes because it contains `$` characters):
+
+```bash
+export ADMIN_PASSWORD_HASH='paste-generated-hash-here'
+export FLASK_SECRET_KEY='paste-generated-secret-here'
+python app/run.py
+```
+
+Open `/admin`, sign in, and use the account buttons to start OAuth. The old `/auth` and `/tiktok-auth` URLs now require the same admin session. Submitted YouTube links are validated, normalized, and saved to `app/data/admin.sqlite3` by default; this database is ignored by Git. A submission is a **pending queue item**. It does not start transcription, clipping, or publishing automatically.
+
+The existing pipeline agent can read and update the queue with:
+
+```bash
+python scripts/admin_queue.py list --status pending
+python scripts/admin_queue.py set-status VIDEO_ID in_progress
+python scripts/admin_queue.py set-status VIDEO_ID completed
+# Use failed if processing does not succeed.
+```
+
+Set `ADMIN_DB_PATH` to an absolute path if the web app and pipeline run from different working directories on the same machine; both must use the same database. A separate-host deployment needs a shared queue or database service instead of this local SQLite file. Mark an item `completed` only after the existing review and delivery workflow succeeds. The admin page shows the latest 50 submissions and their status.
+
+Run `python -m unittest test_admin test_pipeline` before deploying changes to the admin routes.
+
 Untuk upload hasil episode tertentu, arahkan uploader ke workspace episode tersebut:
 
 ```bash
