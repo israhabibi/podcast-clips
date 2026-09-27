@@ -83,7 +83,7 @@
 
         <section class="card">
             <h2>Add a YouTube episode</h2>
-            <p>This saves the link to a local pending queue for the podcast pipeline. It does not start rendering or publish a clip.</p>
+            <p>Tambahkan link ke antrean atau langsung mulai proses lokal. Hasil tetap lokal dan tidak otomatis dipublikasikan.</p>
             <form method="post" action="{{ url_for('admin_add_youtube_link') }}">
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <label for="url">YouTube video link</label>
@@ -94,7 +94,8 @@
                 </select>
                 <label for="title">Episode title <small>(optional)</small></label>
                 <input id="title" name="title" type="text" maxlength="200" placeholder="Add a title if you know it">
-                <button type="submit" style="margin-top:18px">Add to queue</button>
+                <button type="submit" name="action" value="process" style="margin-top:18px">Proses sekarang</button>
+                <button class="secondary" type="submit" name="action" value="queue" style="margin-top:18px">Tambahkan ke antrean</button>
             </form>
         </section>
 

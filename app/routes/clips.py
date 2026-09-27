@@ -3,7 +3,7 @@ from flask import render_template, send_from_directory
 import json, os
 from app import app, CLIPS_DIR
 
-ALLOWED_PODCASTS = {'jelasin-dong', 'bocor-alus', 'tukang-kupas'}
+ALLOWED_PODCASTS = {'jelasin-dong', 'bocor-alus', 'tukang-kupas', 'tempodotco'}
 
 def _safe_path(*parts):
     """Ensure path components are safe (no traversal) and join them."""

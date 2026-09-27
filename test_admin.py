@@ -86,6 +86,42 @@ class AdminPageTests(unittest.TestCase):
         self.client.post("/admin/youtube-links", data=data)
         self.assertEqual(len(list_submissions()), 1)
 
+    def test_process_action_starts_worker_and_marks_submission_in_progress(self):
+        from app.admin_store import list_submissions
+        self.login()
+        data = {
+            "csrf_token": self.csrf(),
+            "url": "https://youtu.be/abcdefghijk",
+            "podcast": "jelasin-dong",
+            "title": "Test episode",
+            "action": "process",
+        }
+        with patch.dict(os.environ, {"ADMIN_JOB_LOG_DIR": str(Path(self.tempdir.name) / "logs")}):
+            with patch("app.routes.admin.subprocess.Popen") as worker:
+                response = self.client.post("/admin/youtube-links", data=data)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(list_submissions()[0]["status"], "in_progress")
+        worker.assert_called_once()
+
+    def test_episode_worker_marks_submission_completed(self):
+        from app.admin_store import add_submission, list_submissions
+        from scripts.process_episode import main as process_episode
+        video_id = add_submission("https://youtu.be/abcdefghijk", "jelasin-dong", "Test episode")
+        with patch("scripts.process_episode.subprocess.run", return_value=Mock(returncode=0)) as runner:
+            with patch("sys.argv", ["process_episode.py", video_id]):
+                self.assertEqual(process_episode(), 0)
+        self.assertEqual(list_submissions()[0]["status"], "completed")
+        self.assertEqual(runner.call_args.args[0][1], str(Path(__file__).resolve().parent / "run_one_episode.py"))
+
+    def test_episode_worker_marks_nonzero_run_failed(self):
+        from app.admin_store import add_submission, list_submissions
+        from scripts.process_episode import main as process_episode
+        video_id = add_submission("https://youtu.be/abcdefghijk", "jelasin-dong", "Test episode")
+        with patch("scripts.process_episode.subprocess.run", return_value=Mock(returncode=1)):
+            with patch("sys.argv", ["process_episode.py", video_id]):
+                self.assertEqual(process_episode(), 1)
+        self.assertEqual(list_submissions()[0]["status"], "failed")
+
     def test_submission_requires_csrf_and_login(self):
         data = {"url": "https://youtu.be/abcdefghijk", "podcast": "jelasin-dong"}
         self.assertEqual(self.client.post("/admin/youtube-links", data=data).status_code, 302)

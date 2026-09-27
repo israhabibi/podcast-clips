@@ -14,7 +14,10 @@ if not KEY:
 if not KEY:
     sys.exit("API key not found")
 
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "MiniMax-M2.7-highspeed"
+# First arg is whisper model size (small/medium etc) — NOT the LLM model
+# Always use MiniMax-M2.7-highspeed for LLM calls
+LLM_MODEL = "MiniMax-M2.7-highspeed"
+MODEL = LLM_MODEL
 WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
 if not WORK_DIR_VALUE:
     sys.exit("PODCAST_WORK_DIR is required, e.g. /tmp/podcast-clips/episode-id")
@@ -80,7 +83,7 @@ req = urllib.request.Request(
     headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
 )
 try:
-    resp = json.load(urllib.request.urlopen(req, timeout=300))
+    resp = json.load(urllib.request.urlopen(req, timeout=600))
 except urllib.error.URLError as e:
     sys.exit(f"LLM request failed: {e}")
 except json.JSONDecodeError as e:
