@@ -100,7 +100,7 @@ for attempt in range(1, MAX_CURATE_ATTEMPTS + 1):
             raise ValueError("missing episode_summary or x_post.text")
         if not 6 <= len(_clips) <= 12:
             raise ValueError(f"got {len(_clips)} clips; expected 6-12")
-        validate_clips(_clips, segs)  # raises ValueError on invalid metadata
+        validate_clips(_clips, segs, min_duration=35, max_duration=75)  # lenient: LLM often lands just outside 40-70
         break  # fully valid
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"[curate] attempt {attempt}/{MAX_CURATE_ATTEMPTS} invalid: {exc}", file=sys.stderr)

@@ -95,7 +95,15 @@ def main():
     episode_title = (sys.argv[3].strip() if len(sys.argv) > 3 else '') or f'YouTube episode {video_id}'
     video_id = parse_video_id(url)
     timestamp = int(time.time())
-    episode_dir = ensure_dir(Path('/tmp/podcast-clips') / f"{video_id}-{timestamp}")
+    # Reuse an existing workdir for this video if it already has source.mp4 (resume-friendly;
+    # never re-download — YouTube 403 rate-limits repeated downloads of the same video).
+    episode_dir = None
+    for d in sorted(Path('/tmp/podcast-clips').glob(f"{video_id}-*")):
+        if d.is_dir() and (d / 'source.mp4').exists():
+            episode_dir = d
+            break
+    if episode_dir is None:
+        episode_dir = ensure_dir(Path('/tmp/podcast-clips') / f"{video_id}-{timestamp}")
     print(f"EPISODE_DIR={episode_dir}")
     print(f"VIDEO_URL={url}")
 
