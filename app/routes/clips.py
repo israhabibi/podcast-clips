@@ -39,8 +39,14 @@ def get_episodes():
             episode_data = _load_json(os.path.join(ep_path, 'episode_data.json')) or {}
             if caps is None or clips_meta is None:
                 continue
-            ep_title = ep.split('_', 1)[1] if '_' in ep else ep
-            ep_title = ep_title.replace('-', ' ').title()
+            # Use episode_title from episode_data.json if available, otherwise parse folder name
+            raw_ep_title = episode_data.get('episode_title', '')
+            if raw_ep_title and raw_ep_title != episode:
+                ep_title = raw_ep_title
+            else:
+                # fallback: strip timestamp suffix like "-1790660631"
+                base = ep.rsplit('-', 1)[0] if '-' in ep else ep
+                ep_title = base.replace('-', ' ').replace('_', ' ').title()
             episodes.append({
                 'podcast': podcast,
                 'episode': ep,
@@ -72,18 +78,26 @@ def clips_view(podcast=None, episode=None):
         clips_meta = _load_json(os.path.join(ep_path, 'clips.json'))
         episode_data = _load_json(os.path.join(ep_path, 'episode_data.json')) or {}
         if caps and clips_meta:
+            raw_title = episode_data.get('episode_title', '')
+            if raw_title and raw_title != episode:
+                ep_title_display = raw_title
+            else:
+                base = episode.rsplit('-', 1)[0] if '-' in episode else episode
+                ep_title_display = base.replace('-', ' ').replace('_', ' ').title()
             return render_template('clips.html', captions=caps, clips_meta=clips_meta,
                                    podcast=podcast, episode=episode,
+                                   episode_title=ep_title_display,
                                    episode_summary=episode_data.get('episode_summary', ''),
                                    x_post=episode_data.get('x_post', {}))
     episodes = get_episodes()
     if episodes:
         ep = episodes[0]
         return render_template('clips.html', captions=ep['captions'],
-                               clips_meta=ep['clips_meta'],
-                               podcast=ep['podcast'], episode=ep['episode'],
-                               episode_summary=ep.get('episode_summary', ''),
-                               x_post=ep.get('x_post', {}))
+                             clips_meta=ep['clips_meta'],
+                             podcast=ep['podcast'], episode=ep['episode'],
+                             episode_title=ep.get('episode_title', ep['episode']),
+                             episode_summary=ep.get('episode_summary', ''),
+                             x_post=ep.get('x_post', {}))
     return 'Belum ada klip.'
 
 @app.route('/static/clips/<podcast>/<episode>/<filename>')

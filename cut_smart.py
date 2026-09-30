@@ -2,6 +2,9 @@
 """Cut klip dengan auto-reframe: crop 9:16 ngikutin pembicara (YuNet face detect)."""
 import json, subprocess, os, sys, tempfile
 from pathlib import Path
+
+FFMPEG = "/usr/bin/ffmpeg"
+FFPROBE = "/usr/bin/ffprobe"
 import cv2
 import numpy as np
 from scipy.interpolate import CubicSpline
@@ -25,14 +28,14 @@ def face_positions(video, start, dur, samples=48):
     """Sample frame via ffmpeg (AV1-safe), return list of (t, face_cx)."""
     import subprocess as sp
     with tempfile.TemporaryDirectory() as tmp:
-        r = sp.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),
+        r = sp.run([FFMPEG, "-y", "-ss", str(start), "-t", str(dur),
             "-i", video, "-vf", f"fps={samples/max(dur,0.1)},scale=320:-2",
             "-q:v", "5", os.path.join(tmp, "f%04d.jpg")],
             capture_output=True, text=True)
         if r.returncode != 0:
             return [], 0, 0
         # dimensi asli via ffprobe
-        pr = sp.run(["ffprobe", "-v", "error", "-select_streams", "v:0",
+        pr = sp.run([FFPROBE, "-v", "error", "-select_streams", "v:0",
             "-show_entries", "stream=width,height", "-of", "csv=p=0", video],
             capture_output=True, text=True)
         w, h = map(int, pr.stdout.strip().split(","))
@@ -137,7 +140,7 @@ for i, c in enumerate(clips, 1):
     vf = (f"crop={crop_w}:ih:'{xexpr}':0,scale=1080:1920,"
           f"ass={subs_file}:fontsdir=/usr/share/fonts/truetype/dejavu")
     out = str(CLIPS_DIR / f"clip{i:02d}.mp4")
-    r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),
+    r = subprocess.run([FFMPEG, "-y", "-ss", str(start), "-t", str(dur),
         "-i", str(EP), "-vf", vf, "-c:v", "libx264", "-preset", "medium",
         "-crf", "23", "-c:a", "aac", "-b:a", "128k", out],
         capture_output=True, text=True)

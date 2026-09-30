@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """Convert YouTube timestamped transcript text to segments JSON for curate.py.
 
-Usage: PODCAST_TRANSCRIPT_FILE=/tmp/podcast-clips/<episode-id>/transcript.json uv run python youtube_transcript_to_segments.py < transcript.txt
+Usage: uv run python youtube_transcript_to_segments.py < transcript.txt > transcript.json
 
 Input format (from fetch_transcript.py --timestamps --text-only --language id,en):
     0:00 Purbaya kemudian menyampaikan kepada
     0:02 Prabowo kalau eh ya dia melakukan rotasi
     0:07 tapi kemudian ee ibaratnya dihadang lah
 
-Output: [{start, end, text}] array written to PODCAST_TRANSCRIPT_FILE
+Output: [{start, end, text}] array written to transcript.json
 """
-import sys, re, json, os
-from pathlib import Path
+import sys, re, json
 
 lines = sys.stdin.read().strip().split("\n")
 segments = []
@@ -40,10 +39,5 @@ for i, s in enumerate(merged):
     else:
         s["end"] = s["start"] + 3
 
-output_file_value = os.environ.get("PODCAST_TRANSCRIPT_FILE")
-if not output_file_value:
-    sys.exit("PODCAST_TRANSCRIPT_FILE is required, e.g. /tmp/podcast-clips/episode-id/transcript.json")
-output_file = Path(output_file_value)
-output_file.parent.mkdir(parents=True, exist_ok=True)
-json.dump(merged, open(output_file, "w"), ensure_ascii=False, indent=2)
-print(f"{len(merged)} segments written to {output_file}", file=sys.stderr)
+json.dump(merged, open("transcript.json", "w"), ensure_ascii=False, indent=2)
+print(f"{len(merged)} segments written to transcript.json", file=sys.stderr)
