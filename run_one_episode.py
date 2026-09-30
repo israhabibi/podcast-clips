@@ -112,7 +112,18 @@ def main():
 
     source = episode_dir / 'source.mp4'
     if not source.exists():
-        step('download', [yt_dlp, '-f', 'bv*[height<=720]+ba/b[height<=720]', '--merge-output-format', 'mp4', '-o', str(episode_dir / 'source.%(ext)s'), url], env)
+        # 403 Forbidden is transient YouTube rate limiting — retry with backoff (3x)
+        for attempt in range(1, 4):
+            try:
+                step('download', [yt_dlp, '-f', 'bv*[height<=720]+ba/b[height<=720]', '--merge-output-format', 'mp4', '--retries', '3', '-o', str(episode_dir / 'source.%(ext)s'), url], env)
+            except RuntimeError as exc:
+                if attempt == 3:
+                    raise
+                wait = 60 * attempt
+                print(f"[download] attempt {attempt} failed ({exc}); retrying in {wait}s", file=sys.stderr)
+                time.sleep(wait)
+            if source.exists() or any(episode_dir.glob('source.*')):
+                break
     candidates = sorted(episode_dir.glob('source.*'))
     if not source.exists() and candidates:
         first = candidates[0]

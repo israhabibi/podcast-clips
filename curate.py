@@ -63,47 +63,60 @@ Balas HANYA JSON valid, tanpa markdown, tanpa penjelasan:
 Transkrip:
 {transcript_text}"""
 
-req = urllib.request.Request(
-    "https://ai.sumopod.com/v1/chat/completions",
-    data=json.dumps({
-        "model": MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }).encode(),
-    headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-)
-try:
-    resp = json.load(urllib.request.urlopen(req, timeout=600))
-except urllib.error.URLError as e:
-    sys.exit(f"LLM request failed: {e}")
-except json.JSONDecodeError as e:
-    sys.exit(f"LLM response not valid JSON: {e}")
+def call_llm():
+    req = urllib.request.Request(
+        "https://ai.sumopod.com/v1/chat/completions",
+        data=json.dumps({
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        }).encode(),
+        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+    )
+    try:
+        resp = json.load(urllib.request.urlopen(req, timeout=600))
+    except urllib.error.URLError as e:
+        sys.exit(f"LLM request failed: {e}")
+    except json.JSONDecodeError as e:
+        sys.exit(f"LLM response not valid JSON: {e}")
+    return resp["choices"][0]["message"]["content"].strip()
 
-content = resp["choices"][0]["message"]["content"].strip()
-# Extract JSON object (may be wrapped in ``` or just raw)
-try:
-    # Try to find outermost braces
-    start = content.index('{')
-    end = content.rindex('}') + 1
-    content = content[start:end]
-    data = json.loads(content)
-except (ValueError, json.JSONDecodeError):
-    sys.exit(f"Failed to parse JSON from LLM response: {content[:200]}")
+
+# Retry up to 3x: transient LLM failures (bad JSON, invalid clip metadata, wrong clip count)
+# are common; the worker aborts the whole episode otherwise.
+MAX_CURATE_ATTEMPTS = 3
+content = None
+for attempt in range(1, MAX_CURATE_ATTEMPTS + 1):
+    content = call_llm()
+    # Extract JSON object (may be wrapped in ``` or just raw)
+    try:
+        start = content.index('{')
+        end = content.rindex('}') + 1
+        candidate = json.loads(content[start:end])
+        _summary = candidate.get("episode_summary", "")
+        _xpost = candidate.get("x_post", {})
+        _clips = candidate.get("clips", [])
+        if not _summary or not _xpost.get("text"):
+            raise ValueError("missing episode_summary or x_post.text")
+        if not 6 <= len(_clips) <= 12:
+            raise ValueError(f"got {len(_clips)} clips; expected 6-12")
+        validate_clips(_clips, segs)  # raises ValueError on invalid metadata
+        break  # fully valid
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(f"[curate] attempt {attempt}/{MAX_CURATE_ATTEMPTS} invalid: {exc}", file=sys.stderr)
+        if attempt == MAX_CURATE_ATTEMPTS:
+            sys.exit(f"curate failed after {MAX_CURATE_ATTEMPTS} attempts: {exc}")
+        content = None
+
+# Re-extract from the last valid content (validate passed)
+start = content.index('{')
+end = content.rindex('}') + 1
+content = content[start:end]
+data = json.loads(content)
 
 episode_summary = data.get("episode_summary", "")
 x_post = data.get("x_post", {})
 clips = data.get("clips", [])
-
-if not episode_summary:
-    sys.exit("LLM returned no episode_summary")
-if not x_post or not x_post.get("text"):
-    sys.exit("LLM returned no x_post.text")
-if not 6 <= len(clips) <= 12:
-    sys.exit(f"LLM returned {len(clips)} clips; expected between 6 and 12")
-try:
-    clips = validate_clips(clips, segs)
-except ValueError as exc:
-    sys.exit(f"Invalid clip metadata: {exc}")
 
 # Build episode_data.json
 episode_data = {
