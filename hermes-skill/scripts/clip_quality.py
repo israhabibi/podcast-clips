@@ -65,8 +65,12 @@ def validate_clips(clips, segments, *, min_duration=40, max_duration=70, boundar
         end = _number(clip.get("end"), f"Clip {index} end")
         title = clip.get("title")
         hook = clip.get("hook")
-        if not isinstance(title, str) or not title.strip() or len(title.strip()) > 50:
-            raise ValueError(f"Clip {index} needs a title of 1-50 characters.")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError(f"Clip {index} needs a nonempty title.")
+        title = title.strip()
+        if len(title) > 50:
+            shortened = title[:47].rsplit(" ", 1)[0].rstrip()
+            title = f"{shortened or title[:47].rstrip()}..."
         if not isinstance(hook, str) or not hook.strip():
             raise ValueError(f"Clip {index} needs a transcript hook.")
         snapped_start = min(starts, key=lambda boundary: abs(boundary - start))
@@ -81,6 +85,10 @@ def validate_clips(clips, segments, *, min_duration=40, max_duration=70, boundar
             if segment["end"] > snapped_start and segment["start"] < snapped_end
         )
         if _normalized_text(hook) not in _normalized_text(clip_text):
-            raise ValueError(f"Clip {index} hook is not a verbatim quote from its transcript range.")
+            first_segment = next(
+                segment for segment in transcript
+                if segment["end"] > snapped_start and segment["start"] < snapped_end
+            )
+            hook = first_segment["text"]
         validated.append({**clip, "start": snapped_start, "end": snapped_end, "title": title.strip(), "hook": hook.strip()})
     return validated

@@ -52,7 +52,7 @@ Kriteria klip:
 - Setiap klip punya alur mini: hook/pertanyaan, konteks secukupnya, lalu payoff atau insight
 - Mulai dan akhiri pada batas kalimat yang utuh; jangan memotong kata atau membuang konteks yang diperlukan
 - Pilih momen yang berbeda dan tidak mengulang bagian transkrip yang sama
-- HINDARI topik politik/sara, pilih yang hiburan/cerita/insight netral
+- Topik politik diperbolehkan untuk podcast politik; jangan menambahkan klaim atau konteks yang tidak didukung transkrip
 - Pilih start tepat pada awal segmen transkrip dan end tepat pada akhir segmen transkrip; jangan menebak timestamp di tengah segmen
 - Field hook harus berupa kutipan verbatim dari teks pada rentang klip, bukan parafrasa
 - Pilih rentang 40-70 detik setelah diselaraskan ke batas segmen

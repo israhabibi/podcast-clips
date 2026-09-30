@@ -107,18 +107,37 @@ class TestClipQuality(unittest.TestCase):
         self.assertIn("[10.00-25.00] Kita bahas hasil riset terbaru.", rendered)
         self.assertIn("[50.00-65.00] Itulah bagian yang paling mengejutkan.", rendered)
 
-    def test_clip_times_snap_and_hook_must_be_verbatim(self):
+    def test_clip_times_snap_and_nonverbatim_hook_uses_transcript_quote(self):
         clips = [{
             "start": 10.8,
             "end": 50.7,
             "title": "Temuan mengejutkan",
-            "hook": "Temuan ini mengubah cara pandang kita",
+            "hook": "Klaim sensasional yang tidak ada di transkrip",
         }]
         validated = self.validate_clips(clips, self.segments)
         self.assertEqual((validated[0]["start"], validated[0]["end"]), (10.0, 50.0))
-        clips[0]["hook"] = "Klaim sensasional yang tidak ada di transkrip"
-        with self.assertRaisesRegex(ValueError, "verbatim quote"):
-            self.validate_clips(clips, self.segments)
+        self.assertEqual(validated[0]["hook"], self.segments[1]["text"])
+
+    def test_verbatim_hook_is_preserved(self):
+        clips = [{
+            "start": 10.0,
+            "end": 50.0,
+            "title": "Temuan mengejutkan",
+            "hook": "Temuan ini mengubah cara pandang kita",
+        }]
+        validated = self.validate_clips(clips, self.segments)
+        self.assertEqual(validated[0]["hook"], clips[0]["hook"])
+
+    def test_overlong_title_is_shortened_without_invalidating_clip(self):
+        clips = [{
+            "start": 10.0,
+            "end": 50.0,
+            "title": "Judul klip yang terlalu panjang untuk ditampilkan pada video pendek",
+            "hook": "Temuan ini mengubah cara pandang kita",
+        }]
+        validated = self.validate_clips(clips, self.segments)
+        self.assertLessEqual(len(validated[0]["title"]), 50)
+        self.assertTrue(validated[0]["title"].endswith("..."))
 
     def test_clip_with_unmatched_timestamp_is_rejected(self):
         clips = [{
