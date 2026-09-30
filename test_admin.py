@@ -51,6 +51,8 @@ class AdminPageTests(unittest.TestCase):
             self.assertIn("/admin/login", response.headers["Location"])
         for path in ("/oauth?code=x&state=y", "/tiktok-oauth?code=x&state=y"):
             self.assertEqual(self.client.get(path).status_code, 403)
+        metadata_response = self.client.get("/admin/youtube-metadata?url=https://youtu.be/abcdefghijk")
+        self.assertEqual(metadata_response.status_code, 302)
 
     def test_login_needs_csrf_and_correct_password(self):
         self.client.get("/admin/login")
@@ -85,6 +87,82 @@ class AdminPageTests(unittest.TestCase):
         data["url"] = "https://youtube.com.evil.example/watch?v=abcdefghijk"
         self.client.post("/admin/youtube-links", data=data)
         self.assertEqual(len(list_submissions()), 1)
+
+    def test_admin_metadata_endpoint_returns_public_video_details(self):
+        self.login()
+        expected = {
+            "video_id": "abcdefghijk",
+            "title": "Bocor Alus Politik: Test Episode",
+            "author_name": "Tempo",
+            "podcast": "bocor-alus",
+        }
+        with patch("app.routes.admin.get_youtube_video_metadata", return_value=expected) as lookup:
+            response = self.client.get("/admin/youtube-metadata?url=https://youtu.be/abcdefghijk")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), expected)
+        lookup.assert_called_once_with("https://youtu.be/abcdefghijk")
+
+    def test_metadata_lookup_matches_podcast_title_without_playlist_requests(self):
+        from app.youtube_metadata import get_youtube_video_metadata
+
+        payload = json.dumps({
+            "title": "Bocor Alus Politik: Test Episode",
+            "author_name": "Tempo",
+        }).encode()
+        with patch("app.youtube_metadata.urlopen") as open_url:
+            open_url.return_value.__enter__.return_value.read.return_value = payload
+            metadata = get_youtube_video_metadata("https://youtu.be/abcdefghijk")
+        self.assertEqual(metadata["title"], "Bocor Alus Politik: Test Episode")
+        self.assertEqual(metadata["podcast"], "bocor-alus")
+        open_url.assert_called_once()
+
+    def test_metadata_lookup_falls_back_to_known_playlist(self):
+        from app.youtube_metadata import get_youtube_video_metadata
+
+        payload = json.dumps({"title": "Episode terbaru", "author_name": "Tempo"}).encode()
+        with patch("app.youtube_metadata.urlopen") as open_url:
+            open_url.return_value.__enter__.return_value.read.return_value = payload
+            with patch("app.youtube_metadata._match_playlist", return_value="tukang-kupas") as playlist_lookup:
+                metadata = get_youtube_video_metadata("https://youtu.be/abcdefghijk")
+        self.assertEqual(metadata["podcast"], "tukang-kupas")
+        playlist_lookup.assert_called_once_with("abcdefghijk")
+
+    def test_admin_form_has_metadata_autofill_controls(self):
+        self.login()
+        response = self.client.get("/admin")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"youtube-lookup-status", response.data)
+        self.assertIn(b"/admin/youtube-metadata?url=", response.data)
+
+    def test_admin_jobs_reports_current_transcription_stage(self):
+        from app.admin_store import add_submission, set_submission_status
+
+        self.login()
+        video_id = add_submission("https://youtu.be/abcdefghijk", "bocor-alus", "Test episode")
+        set_submission_status(video_id, "in_progress")
+        log_dir = Path(self.tempdir.name) / "jobs"
+        episode_dir = Path("/tmp/podcast-clips") / f"{video_id}-test-progress"
+        episode_dir.mkdir(parents=True, exist_ok=True)
+        (episode_dir / "source.mp4").touch()
+        (log_dir / f"{video_id}.log").parent.mkdir(parents=True, exist_ok=True)
+        (log_dir / f"{video_id}.log").write_text(
+            f"EPISODE_DIR={episode_dir}\n=== download ===\nDownload finished\n",
+            encoding="utf-8",
+        )
+        try:
+            with patch.dict(os.environ, {"ADMIN_JOB_LOG_DIR": str(log_dir)}):
+                response = self.client.get("/admin/jobs")
+            self.assertEqual(response.status_code, 200)
+            job = response.get_json()["jobs"][0]
+            self.assertEqual(job["label"], "Berjalan")
+            self.assertEqual(job["stage"], "Mentranskripsikan audio")
+            self.assertEqual(job["percent"], 25)
+        finally:
+            (episode_dir / "source.mp4").unlink(missing_ok=True)
+            episode_dir.rmdir()
+
+    def test_anonymous_cannot_read_job_progress(self):
+        self.assertEqual(self.client.get("/admin/jobs").status_code, 302)
 
     def test_process_action_starts_worker_and_marks_submission_in_progress(self):
         from app.admin_store import list_submissions

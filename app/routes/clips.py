@@ -41,7 +41,7 @@ def get_episodes():
                 continue
             # Use episode_title from episode_data.json if available, otherwise parse folder name
             raw_ep_title = episode_data.get('episode_title', '')
-            if raw_ep_title and raw_ep_title != episode:
+            if raw_ep_title and raw_ep_title != ep:
                 ep_title = raw_ep_title
             else:
                 # fallback: strip timestamp suffix like "-1790660631"

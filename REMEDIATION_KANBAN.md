@@ -6,7 +6,7 @@
 
 | Ready | Waiting / blocked | In progress | Review | Done |
 | --- | --- | --- | --- | --- |
-| [PIPE-01](#pipe-01-fix-tiktok-caption-path)<br>[PIPE-02](#pipe-02-add-episode-lifecycle-and-retry)<br>[PIPE-03](#pipe-03-validate-clip-metadata)<br>[WEB-01](#web-01-correct-gallery-routing-and-title)<br>[MEDIA-01](#media-01-fix-face-track-fallback)<br>[OPS-01](#ops-01-make-setup-reproducible) | [PIPE-04](#pipe-04-fail-incomplete-batches) after PIPE-03<br>[PUB-01](#pub-01-add-review-gate-and-upload-idempotency) after PIPE-04 and SEC-02<br>[QA-01](#qa-01-add-regression-tests) alongside completed code tasks<br>[OPS-02](#ops-02-enforce-server-side-branch-protection) requires repository administrator access | [SEC-01](#sec-01-protect-oauth-routes-and-session-secret)<br>[SEC-02](#sec-02-harden-oauth-callbacks-and-token-replacement) | None | None |
+| [PIPE-02](#pipe-02-add-episode-lifecycle-and-retry)<br>[PIPE-03](#pipe-03-validate-clip-metadata)<br>[WEB-01](#web-01-correct-gallery-routing-and-title)<br>[MEDIA-01](#media-01-fix-face-track-fallback)<br>[OPS-01](#ops-01-make-setup-reproducible) | [PIPE-04](#pipe-04-fail-incomplete-batches) after PIPE-03<br>[PUB-01](#pub-01-add-review-gate-and-upload-idempotency) after PIPE-04 and SEC-02<br>[QA-01](#qa-01-add-regression-tests) alongside completed code tasks<br>[OPS-02](#ops-02-enforce-server-side-branch-protection) requires repository administrator access | [SEC-01](#sec-01-protect-oauth-routes-and-session-secret)<br>[SEC-02](#sec-02-harden-oauth-callbacks-and-token-replacement) | None | [PIPE-01](#pipe-01-fix-tiktok-caption-path) |
 
 Move a task ID to **In progress** when work starts, to **Review** when its code and verification are ready, and to **Done** only when every acceptance checkbox is satisfied. Keep blockers in the task card. If a task needs a design choice, record the choice in the PR or an implementation note rather than silently changing the contract. Work on the `hermes-skill/scripts/` mirror whenever a mirrored script changes.
 
@@ -50,12 +50,13 @@ Move a task ID to **In progress** when work starts, to **Review** when its code 
 - **Scope:** `scripts/tiktok_upload.py`, `hermes-skill/scripts/tiktok_upload.py`
 - **Depends on:** none
 - **Implementation:** Read `captions.json` from `PODCAST_WORK_DIR`, matching `caption.py` and the YouTube uploader. Validate that referenced MP4 files exist before upload.
+- **Progress:** Root-level caption loading and MP4 preflight are implemented in both copies; regression tests pass without live TikTok requests.
 
 **Acceptance:**
 
-- [ ] A temporary workspace with root-level `captions.json` is accepted.
-- [ ] A missing caption file or referenced clip returns a clear nonzero failure.
-- [ ] Both uploader copies have the same behavior.
+- [x] A temporary workspace with root-level `captions.json` is accepted.
+- [x] A missing caption file or referenced clip returns a clear nonzero failure.
+- [x] Both uploader copies have the same behavior.
 
 ### PIPE-02 Add episode lifecycle and retry
 

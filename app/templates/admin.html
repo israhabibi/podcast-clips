@@ -33,6 +33,8 @@
         th, td { text-align: left; padding: 10px; border-bottom: 1px solid #383838; vertical-align: top; }
         th { color: #aaa; font-size: .85rem; }
         small { color: #aaa; }
+        .job-stage { display: block; min-width: 150px; margin-bottom: 6px; }
+        progress { display: block; width: 150px; height: 6px; accent-color: #ef5555; }
         @media (max-width: 600px) { header { align-items: flex-start; } .top-actions { flex-direction: column; align-items: flex-end; } }
     </style>
 </head>
@@ -88,8 +90,10 @@
                 <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
                 <label for="url">YouTube video link</label>
                 <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+                <small id="youtube-lookup-status" role="status" aria-live="polite">Tempel link untuk mengisi judul dan mendeteksi podcast.</small>
                 <label for="podcast">Podcast</label>
                 <select id="podcast" name="podcast" required>
+                    <option value="" selected disabled>Pilih podcast atau tempel link</option>
                     {% for podcast in podcasts %}<option value="{{ podcast }}">{{ podcast }}</option>{% endfor %}
                 </select>
                 <label for="title">Episode title <small>(optional)</small></label>
@@ -103,14 +107,18 @@
             <h2>Recent submissions</h2>
             {% if submissions %}
                 <div class="table-wrap"><table>
-                    <thead><tr><th>Submitted</th><th>Podcast / title</th><th>Video</th><th>Status</th></tr></thead>
+                    <thead><tr><th>Submitted</th><th>Podcast / title</th><th>Video</th><th>Process</th></tr></thead>
                     <tbody>
                         {% for item in submissions %}
-                            <tr>
+                            <tr data-video-id="{{ item.video_id }}">
                                 <td><small>{{ item.created_at[:16].replace('T', ' ') }} UTC</small></td>
                                 <td>{{ item.podcast }}{% if item.title %}<br><small>{{ item.title }}</small>{% endif %}</td>
                                 <td><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.video_id }}</a></td>
-                                <td>{{ item.status }}</td>
+                                <td class="job-progress">
+                                    <span class="job-stage">{{ item.progress.stage }}</span>
+                                    <small class="job-label">{{ item.progress.label }}</small>
+                                    <progress max="100" value="{{ item.progress.percent }}" aria-label="{{ item.progress.stage }}"></progress>
+                                </td>
                             </tr>
                         {% endfor %}
                     </tbody>
@@ -120,5 +128,86 @@
             {% endif %}
         </section>
     </main>
+    <script>
+        const jobRows = document.querySelectorAll("tr[data-video-id]");
+        const hasRunningJobs = [...jobRows].some(row => row.querySelector(".job-label")?.textContent === "Berjalan");
+
+        async function refreshJobProgress() {
+            try {
+                const response = await fetch("{{ url_for('admin_jobs') }}", { headers: { Accept: "application/json" } });
+                if (!response.ok) return;
+                const result = await response.json();
+                for (const job of result.jobs) {
+                    const row = document.querySelector(`tr[data-video-id="${CSS.escape(job.video_id)}"]`);
+                    if (!row) continue;
+                    row.querySelector(".job-stage").textContent = job.stage;
+                    row.querySelector(".job-label").textContent = job.label;
+                    const progress = row.querySelector("progress");
+                    progress.value = job.percent;
+                    progress.setAttribute("aria-label", job.stage);
+                }
+            } catch (error) {
+                console.error("Could not refresh episode process status", error);
+            }
+        }
+
+        if (hasRunningJobs) setInterval(refreshJobProgress, 5000);
+
+        const youtubeUrl = document.querySelector("#url");
+        const podcastSelect = document.querySelector("#podcast");
+        const titleInput = document.querySelector("#title");
+        const lookupStatus = document.querySelector("#youtube-lookup-status");
+        let lookupTimer;
+        let lookupSequence = 0;
+        let autoPodcast = "";
+        let autoTitle = "";
+        let podcastWasEdited = false;
+
+        podcastSelect.addEventListener("change", () => {
+            podcastWasEdited = true;
+        });
+
+        youtubeUrl.addEventListener("input", () => {
+            clearTimeout(lookupTimer);
+            const sequence = ++lookupSequence;
+            if (!youtubeUrl.value.trim()) {
+                lookupStatus.textContent = "Tempel link untuk mengisi judul dan mendeteksi podcast.";
+                return;
+            }
+            if (autoPodcast && !podcastWasEdited && podcastSelect.value === autoPodcast) {
+                podcastSelect.value = "";
+            }
+            if (autoTitle && titleInput.value === autoTitle) {
+                titleInput.value = "";
+            }
+            autoPodcast = "";
+            autoTitle = "";
+            lookupStatus.textContent = "Mencari judul dan podcast...";
+            lookupTimer = setTimeout(async () => {
+                try {
+                    const endpoint = "{{ url_for('admin_youtube_metadata') }}?url=" + encodeURIComponent(youtubeUrl.value.trim());
+                    const response = await fetch(endpoint, { headers: { Accept: "application/json" } });
+                    const metadata = await response.json();
+                    if (sequence !== lookupSequence) return;
+                    if (!response.ok) throw new Error(metadata.error || "Metadata tidak tersedia.");
+                    if (!titleInput.value) {
+                        titleInput.value = metadata.title;
+                        autoTitle = metadata.title;
+                    }
+                    if (metadata.podcast && !podcastWasEdited) {
+                        podcastSelect.value = metadata.podcast;
+                        autoPodcast = metadata.podcast;
+                        lookupStatus.textContent = `Terdeteksi: ${metadata.title} · ${metadata.podcast}`;
+                    } else {
+                        lookupStatus.textContent = metadata.podcast
+                            ? `Judul terisi: ${metadata.title} · pilihan podcast manual dipertahankan.`
+                            : `Judul terisi: ${metadata.title} · podcast belum dikenali, pilih manual.`;
+                    }
+                } catch (error) {
+                    if (sequence === lookupSequence) lookupStatus.textContent = error.message;
+                }
+            }, 500);
+        });
+    </script>
 </body>
 </html>

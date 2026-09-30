@@ -3,11 +3,15 @@
 import json, subprocess, os, sys, tempfile
 import cv2
 import numpy as np
+from news_overlay import build_news_overlay_event
 
 EP = sys.argv[1] if len(sys.argv) > 1 else "ep1.mp4"
 os.makedirs("clips", exist_ok=True)
 clips = json.load(open("clips.json"))
 segs = json.load(open("transcript.json"))
+search_results = json.load(open("search_results.json")) if os.path.exists("search_results.json") else {}
+if not isinstance(search_results, dict):
+    sys.exit("search_results.json must be an object keyed by clip number")
 
 det = cv2.FaceDetectorYN.create("/tmp/face_yunet.onnx", "", (320, 320), 0.6)
 # model: curl -sL -o /tmp/face_yunet.onnx https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx
@@ -98,6 +102,7 @@ for i, c in enumerate(clips, 1):
            "[V4+ Styles]",
            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
            "Style: Default,DejaVu Sans,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,60,60,300,1", "",
+           "Style: SourceCard,DejaVu Sans,28,&H00FFFFFF,&H000000FF,&H00000000,&H99080E12,-1,0,0,0,100,100,0,0,3,14,0,7,24,240,20,1", "",
            "[Events]",
            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     def ts(t):
@@ -105,6 +110,10 @@ for i, c in enumerate(clips, 1):
         return f"{hh}:{m:02d}:{s:05.2f}"
     for st, en, txt in subs:
         ass.append(f"Dialogue: 0,{ts(st)},{ts(en)},Default,,0,0,0,,{txt}")
+    news_sources = search_results.get(str(i), search_results.get(i, []))
+    source_event = build_news_overlay_event(news_sources, dur)
+    if source_event:
+        ass.append(source_event)
     open("subs.ass", "w").write("\n".join(ass))
     # crop bergeser mengikuti track (sendfile expression)
     exprs = [f"if(between(t\\,{t:.2f}\\,{(track[j+1][0] if j+1 < len(track) else dur):.2f})\\,{x - crop_w/2:.0f}\\," for j, (t, x) in enumerate(track)]

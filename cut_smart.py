@@ -8,6 +8,7 @@ FFPROBE = "/usr/bin/ffprobe"
 import cv2
 import numpy as np
 from scipy.interpolate import CubicSpline
+from news_overlay import build_news_overlay_event
 
 if len(sys.argv) < 2:
     sys.exit("Usage: python cut_smart.py <source-video>")
@@ -20,6 +21,10 @@ CLIPS_DIR = WORK_DIR / "clips"
 CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 clips = json.load(open(WORK_DIR / "clips.json"))
 segs = json.load(open(WORK_DIR / "transcript.json"))
+search_results_path = WORK_DIR / "search_results.json"
+search_results = json.loads(search_results_path.read_text(encoding="utf-8")) if search_results_path.exists() else {}
+if not isinstance(search_results, dict):
+    sys.exit("search_results.json must be an object keyed by clip number")
 FONT = "DejaVuSans-Bold"
 
 det = cv2.FaceDetectorYN.create("/tmp/face_yunet.onnx", "", (320, 320), 0.6)
@@ -119,6 +124,7 @@ for i, c in enumerate(clips, 1):
            "[V4+ Styles]",
            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
            "Style: Default,DejaVu Sans,72,&H00FFFFFF,&H000000FF,&H00000000,&H80000000,-1,0,0,0,100,100,0,0,1,5,2,2,60,60,300,1", "",
+           "Style: SourceCard,DejaVu Sans,28,&H00FFFFFF,&H000000FF,&H00000000,&H99080E12,-1,0,0,0,100,100,0,0,3,14,0,7,24,240,20,1", "",
            "[Events]",
            "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text"]
     def ts(t):
@@ -126,6 +132,10 @@ for i, c in enumerate(clips, 1):
         return f"{hh}:{m:02d}:{s:05.2f}"
     for st, en, txt in subs:
         ass.append(f"Dialogue: 0,{ts(st)},{ts(en)},Default,,0,0,0,,{txt}")
+    news_sources = search_results.get(str(i), search_results.get(i, []))
+    source_event = build_news_overlay_event(news_sources, dur)
+    if source_event:
+        ass.append(source_event)
     subs_file = WORK_DIR / "subs.ass"
     subs_file.write_text("\n".join(ass))
     # FFmpeg needs an interpolated x value; using a constant per interval causes visible jumps.

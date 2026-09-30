@@ -2,6 +2,7 @@
 """Kurasi momen terbaik + rangkuman episode + x post dari transkrip podcast via LLM (SumoPod)."""
 import json, sys, os, urllib.request, re
 from pathlib import Path
+from clip_quality import format_timed_transcript, validate_clips
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
 if not KEY:
@@ -34,23 +35,7 @@ EPISODE_SLUG = re.sub(r'[^a-z0-9]+', '-', EPISODE_TITLE_RAW.lower()).strip('-')
 with open(WORK_DIR / "transcript.json") as f:
     segs = json.load(f)
 
-# buat transkrip bertimestamp (per ~30s chunk biar ringkas)
-lines = []
-cur_start = None
-buf = []
-def flush():
-    global cur_start, buf
-    if buf:
-        lines.append(f"[{cur_start:.0f}s] " + " ".join(buf))
-    buf = []
-for s in segs:
-    if cur_start is None:
-        cur_start = s["start"]
-    buf.append(s["text"])
-    if s["end"] - cur_start >= 30:
-        flush(); cur_start = None
-flush()
-transcript_text = "\n".join(lines)
+transcript_text = format_timed_transcript(segs)
 
 prompt = f"""Kamu editor clip podcast. Dibawah ini transkrip podcast berbahasa Indonesia dengan timestamp.
 
@@ -64,8 +49,13 @@ Tugas kamuhasilkan SATUSATU respons JSON dengan tiga field:
 Kriteria klip:
 - Ada punchline, hot take, cerita lucu, momen kaget, atau insight menarik
 - Pembukaan klip harus langsung hook (kalimat pertama menarik, bukan kalimat lanjutan)
-- Klip harus berdiri sendiri (gak perlu konteks sebelumnya)
+- Setiap klip punya alur mini: hook/pertanyaan, konteks secukupnya, lalu payoff atau insight
+- Mulai dan akhiri pada batas kalimat yang utuh; jangan memotong kata atau membuang konteks yang diperlukan
+- Pilih momen yang berbeda dan tidak mengulang bagian transkrip yang sama
 - HINDARI topik politik/sara, pilih yang hiburan/cerita/insight netral
+- Pilih start tepat pada awal segmen transkrip dan end tepat pada akhir segmen transkrip; jangan menebak timestamp di tengah segmen
+- Field hook harus berupa kutipan verbatim dari teks pada rentang klip, bukan parafrasa
+- Pilih rentang 40-70 detik setelah diselaraskan ke batas segmen
 
 Balas HANYA JSON valid, tanpa markdown, tanpa penjelasan:
 {{{{"episode_summary": "...", "x_post": {{"text": "...", "hashtags": ["#tag1", ...]}}, "clips": [{{"start": <detik>, "end": <detik>, "title": "<judul max 50 char>", "hook": "<kalimat hook dari klip>"}}]}}}}
@@ -110,6 +100,10 @@ if not x_post or not x_post.get("text"):
     sys.exit("LLM returned no x_post.text")
 if not 6 <= len(clips) <= 12:
     sys.exit(f"LLM returned {len(clips)} clips; expected between 6 and 12")
+try:
+    clips = validate_clips(clips, segs)
+except ValueError as exc:
+    sys.exit(f"Invalid clip metadata: {exc}")
 
 # Build episode_data.json
 episode_data = {

@@ -95,7 +95,7 @@ export FLASK_SECRET_KEY='paste-generated-secret-here'
 python app/run.py
 ```
 
-Open `/admin`, sign in, and use the account buttons to start OAuth. The old `/auth` and `/tiktok-auth` URLs now require the same admin session. Submitted YouTube links are validated, normalized, and saved to `app/data/admin.sqlite3` by default; this database is ignored by Git. A submission is a **pending queue item**. It does not start transcription, clipping, or publishing automatically.
+Open `/admin`, sign in, and use the account buttons to start OAuth. The old `/auth` and `/tiktok-auth` URLs now require the same admin session. Pasting a YouTube URL fetches its public title and tries to identify the podcast from the title or the known Tempo playlist feeds; if it cannot identify the show, select it manually. Submitted links are validated, normalized, and saved to `app/data/admin.sqlite3` by default; this database is ignored by Git. A submission is a **pending queue item**. It does not start transcription, clipping, or publishing automatically unless you choose “Proses sekarang”.
 
 The existing pipeline agent can read and update the queue with:
 

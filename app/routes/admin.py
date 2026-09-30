@@ -1,11 +1,12 @@
 """Password-protected account linking and manual YouTube submission page."""
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
 
-from flask import flash, redirect, render_template, request, session, url_for
+from flask import flash, jsonify, redirect, render_template, request, session, url_for
 from werkzeug.security import check_password_hash
 
 from app import app
@@ -14,12 +15,62 @@ from app.admin_store import (
     PODCASTS, add_submission, clear_login_attempts, login_blocked,
     recent_submissions, record_failed_login, set_submission_status,
 )
+from app.youtube_metadata import MetadataLookupError, get_youtube_video_metadata
 from app.config import (
     TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_TOKEN_FILE,
     YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_TOKEN_FILE,
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+JOB_STAGES = {
+    "download": ("Mengunduh video", 10),
+    "curate": ("Memilih momen klip", 55),
+    "cut": ("Merender klip dan subtitle", 75),
+    "caption": ("Membuat caption", 90),
+}
+
+
+def _job_progress(item):
+    status = item["status"]
+    if status == "pending":
+        return {"label": "Menunggu", "stage": "Dalam antrean", "percent": 0}
+    if status == "completed":
+        return {"label": "Selesai", "stage": "Selesai", "percent": 100}
+    if status == "failed":
+        return {"label": "Gagal", "stage": "Perlu diperiksa", "percent": 100}
+
+    log_path = Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs")) / f"{item['video_id']}.log"
+    try:
+        with log_path.open("rb") as log_file:
+            log_file.seek(0, os.SEEK_END)
+            log_file.seek(max(0, log_file.tell() - 65536))
+            log_text = log_file.read().decode("utf-8", errors="replace")
+    except OSError:
+        log_text = ""
+
+    stages = re.findall(r"^=== ([a-z_]+) ===\s*$", log_text, flags=re.MULTILINE)
+    stage = stages[-1] if stages else None
+    if stage == "download":
+        match = re.search(r"^EPISODE_DIR=(.+)$", log_text, flags=re.MULTILINE)
+        if match:
+            episode_dir = Path(match.group(1).strip())
+            if episode_dir.parent == Path("/tmp/podcast-clips"):
+                if (episode_dir / "transcript.json").exists():
+                    return {"label": "Berjalan", "stage": "Menyiapkan kurasi klip", "percent": 35}
+                if (episode_dir / "source.mp4").exists():
+                    return {"label": "Berjalan", "stage": "Mentranskripsikan audio", "percent": 25}
+        return {"label": "Berjalan", "stage": "Mengunduh video", "percent": 10}
+    if stage in JOB_STAGES:
+        label, percent = JOB_STAGES[stage]
+        return {"label": "Berjalan", "stage": label, "percent": percent}
+    return {"label": "Berjalan", "stage": "Memulai proses", "percent": 3}
+
+
+def _submissions_with_progress():
+    rows = recent_submissions()
+    for item in rows:
+        item["progress"] = _job_progress(item)
+    return rows
 
 
 @app.after_request
@@ -77,12 +128,38 @@ def admin_page():
         "admin.html",
         csrf_token=csrf_token(),
         podcasts=PODCASTS,
-        submissions=recent_submissions(),
+        submissions=_submissions_with_progress(),
         youtube_ready=bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET),
         tiktok_ready=bool(TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET),
         youtube_connected=os.path.exists(YOUTUBE_TOKEN_FILE),
         tiktok_connected=os.path.exists(TIKTOK_TOKEN_FILE),
     )
+
+
+@app.route("/admin/jobs")
+@admin_required()
+def admin_jobs():
+    jobs = [
+        {
+            "video_id": item["video_id"],
+            "status": item["status"],
+            **item["progress"],
+        }
+        for item in _submissions_with_progress()
+    ]
+    return jsonify(jobs=jobs)
+
+
+@app.route("/admin/youtube-metadata")
+@admin_required()
+def admin_youtube_metadata():
+    try:
+        metadata = get_youtube_video_metadata(request.args.get("url", ""))
+    except ValueError as exc:
+        return jsonify(error=str(exc)), 400
+    except MetadataLookupError as exc:
+        return jsonify(error=str(exc)), 502
+    return jsonify(metadata)
 
 
 @app.route("/admin/youtube-links", methods=["POST"])

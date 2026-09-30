@@ -8,7 +8,7 @@ WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
 WORK_DIR = Path(WORK_DIR_VALUE) if WORK_DIR_VALUE else None
 TOKEN_FILE = Path(os.environ.get("TIKTOK_TOKEN_FILE", REPO_DIR / "app" / "tiktok_token.json"))
 CLIPS_DIR = WORK_DIR / "clips" if WORK_DIR else None
-CAPTIONS_FILE = os.path.join(CLIPS_DIR, "captions.json") if CLIPS_DIR else None
+CAPTIONS_FILE = WORK_DIR / "captions.json" if WORK_DIR else None
 
 API_BASE = "https://open.tiktokapis.com/v2"
 
@@ -84,35 +84,63 @@ def upload_clip(video_path, caption, idx):
         "message": "Video masuk inbox TikTok. Buka app TikTok > Inbox untuk review & posting."
     }
 
-if __name__ == '__main__':
+def load_captions():
+    if CAPTIONS_FILE is None or not CAPTIONS_FILE.is_file():
+        expected = CAPTIONS_FILE or "PODCAST_WORK_DIR/captions.json"
+        raise FileNotFoundError(f"Captions file not found: {expected}")
+    try:
+        with CAPTIONS_FILE.open(encoding="utf-8") as captions_file:
+            captions = json.load(captions_file)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid captions JSON: {exc}") from exc
+    if not isinstance(captions, dict):
+        raise ValueError("Captions JSON must contain an object keyed by clip number.")
+    for idx, item in captions.items():
+        if not isinstance(item, dict) or not isinstance(item.get("clip"), str):
+            raise ValueError(f"Invalid caption entry for clip {idx}.")
+        if not isinstance(item.get("caption"), str):
+            raise ValueError(f"Caption text is missing for clip {idx}.")
+        clip_path = CLIPS_DIR / item["clip"]
+        if not clip_path.is_file():
+            raise FileNotFoundError(f"Clip file for {idx} not found: {clip_path}")
+    return captions
+
+def main(args=None):
     if WORK_DIR is None:
         print("ERROR: Set PODCAST_WORK_DIR, e.g. PODCAST_WORK_DIR=/tmp/podcast-clips/episode-id")
-        sys.exit(1)
-    if len(sys.argv) < 2:
+        return 1
+    args = sys.argv[1:] if args is None else args
+    if not args:
         print("Usage: python tiktok_upload.py <clip_num>")
         print("       python tiktok_upload.py all")
-        sys.exit(1)
+        return 1
+    try:
+        caps = load_captions()
+    except (OSError, ValueError) as exc:
+        print(f"ERROR: {exc}")
+        return 1
 
-    caps = json.load(open(CAPTIONS_FILE))
-
-    if sys.argv[1] == 'all':
+    if args[0] == 'all':
         for idx in sorted(caps.keys(), key=int):
-            clip_file = os.path.join(CLIPS_DIR, caps[idx]['clip'])
-            if os.path.exists(clip_file):
-                cap_text = caps[idx]['caption'].strip()
-                r = upload_clip(clip_file, cap_text, idx)
-                if 'error' in r:
-                    print(f"  ❌ {idx}. {r['error']}")
-                else:
-                    print(f"  ✅ {idx}. {caps[idx]['title']} — {r['status']}")
+            clip_file = CLIPS_DIR / caps[idx]['clip']
+            cap_text = caps[idx]['caption'].strip()
+            r = upload_clip(clip_file, cap_text, idx)
+            if 'error' in r:
+                print(f"  ❌ {idx}. {r['error']}")
+            else:
+                print(f"  ✅ {idx}. {caps[idx]['title']} — {r['status']}")
     else:
-        idx = sys.argv[1]
+        idx = args[0]
         if idx not in caps:
             print(f"Clip {idx} not found")
-            sys.exit(1)
+            return 1
         cap_text = caps[idx]['caption'].strip()
-        r = upload_clip(os.path.join(CLIPS_DIR, caps[idx]['clip']), cap_text, idx)
+        r = upload_clip(CLIPS_DIR / caps[idx]['clip'], cap_text, idx)
         if 'error' in r:
             print(f"❌ {r['error']}")
         else:
             print(f"✅ {r['message']}")
+    return 0
+
+if __name__ == '__main__':
+    raise SystemExit(main())
