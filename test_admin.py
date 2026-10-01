@@ -164,6 +164,72 @@ class AdminPageTests(unittest.TestCase):
     def test_anonymous_cannot_read_job_progress(self):
         self.assertEqual(self.client.get("/admin/jobs").status_code, 302)
 
+    def test_compilation_build_requires_admin_and_csrf(self):
+        payload = {"episode_id": "episode", "items": []}
+        self.assertEqual(self.client.post("/admin/compilation/build", json=payload).status_code, 302)
+        self.login()
+        self.assertEqual(self.client.post("/admin/compilation/build", json=payload).status_code, 400)
+
+    def test_compilation_build_writes_config_and_starts_worker(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        work_root = Path(self.tempdir.name) / "work"
+        workdir = work_root / "episode-one"
+        workdir.mkdir(parents=True)
+        (workdir / "source.mp4").write_bytes(b"source")
+        (workdir / "transcript.json").write_text("[]", encoding="utf-8")
+        payload = {
+            "csrf_token": self.csrf(),
+            "episode_id": "episode-one",
+            "header_l1": "TOP 5 MOMEN",
+            "header_l2": "BOCOR ALUS",
+            "subheader": "TOPIK",
+            "items": [
+                {"label": f"Moment {index}", "start": index * 10, "end": index * 10 + 8}
+                for index in range(5)
+            ],
+        }
+        with patch.object(admin_routes, "WORK_ROOT", work_root), patch.object(admin_routes.subprocess, "Popen") as worker:
+            response = self.client.post("/admin/compilation/build", json=payload)
+        self.assertEqual(response.status_code, 200)
+        config_files = list(workdir.glob(".compilation-*.json"))
+        self.assertEqual(len(config_files), 1)
+        config = json.loads(config_files[0].read_text())
+        self.assertEqual(len(config["items"]), 5)
+        worker.assert_called_once()
+
+    def test_compilation_preview_serves_built_video(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        work_root = Path(self.tempdir.name) / "work"
+        output = work_root / "episode-one" / "clips"
+        output.mkdir(parents=True)
+        (work_root / "episode-one" / "source.mp4").write_bytes(b"source")
+        (work_root / "episode-one" / "transcript.json").write_text("[]", encoding="utf-8")
+        (output / "top5_compilation.mp4").write_bytes(b"fake mp4")
+        with patch.object(admin_routes, "WORK_ROOT", work_root):
+            response = self.client.get("/admin/compilation/preview/episode-one")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.mimetype, "video/mp4")
+
+    def test_compilation_segments_returns_transcript_candidates(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        work_root = Path(self.tempdir.name) / "work"
+        workdir = work_root / "episode-one"
+        workdir.mkdir(parents=True)
+        (workdir / "source.mp4").write_bytes(b"source")
+        (workdir / "transcript.json").write_text(json.dumps([
+            {"start": 1, "end": 4, "text": "Hook pertama"},
+        ]), encoding="utf-8")
+        with patch.object(admin_routes, "WORK_ROOT", work_root):
+            response = self.client.get("/admin/compilation/segments/episode-one")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json()["segments"][0]["text"], "Hook pertama")
+
     def test_process_action_starts_worker_and_marks_submission_in_progress(self):
         from app.admin_store import list_submissions
         self.login()

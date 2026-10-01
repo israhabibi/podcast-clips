@@ -1,19 +1,32 @@
 #!/usr/bin/env python3
 """TOP 5 v3: persistent 2-line header 'TOP 5 MOMEN BOCOR ALUS / PRABOWO GIBRAN' + numbered list sidebar,
 active item highlighted yellow, per-segment subtitles."""
+import argparse
 import json, subprocess, os
 
-D = "/tmp/podcast-clips/bocor-alus-jokow-prabowo-2029-scenarios"
-SRC = f"{D}/source.mp4"
-OUT = f"{D}/clips/top5_compilation_v3.mp4"
+DEFAULT_WORKDIR = "/tmp/podcast-clips/bocor-alus-jokow-prabowo-2029-scenarios"
+DEFAULT_OUT = "clips/top5_compilation_v3.mp4"
+
+parser = argparse.ArgumentParser()
+parser.add_argument("workdir", nargs="?", default=DEFAULT_WORKDIR)
+parser.add_argument("output", nargs="?", default=None)
+parser.add_argument("--config", type=str, default=None)
+args = parser.parse_args()
+D = os.path.abspath(args.workdir)
+SRC = os.path.join(D, "source.mp4")
+OUT = os.path.abspath(args.output or os.path.join(D, DEFAULT_OUT))
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 WHOOSH = "/usr/share/sounds/sound-icons/pisk-up.wav"
 DING = "/usr/share/sounds/sound-icons/cembalo-12.wav"
-TMP = "/tmp/top5v3"
+TMP = os.path.join(D, ".top5v3")
 os.makedirs(TMP, exist_ok=True)
+os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
 transcript = json.load(open(f"{D}/transcript.json"))
 
+HEADER_L1 = "TOP 5 MOMEN"
+HEADER_L2 = "BOCOR ALUS"
+SUBHEADER = "PRABOWO vs GIBRAN"
 ITEMS = [
     "Ibarat Dual Machine",
     "Makan Siang Hilirisasi",
@@ -30,6 +43,17 @@ SEGS = [
     (261, 282, 3),
     (282, 292, 4),
 ]
+
+if args.config:
+    with open(args.config, encoding="utf-8") as config_file:
+        config = json.load(config_file)
+    HEADER_L1 = str(config.get("header_l1", HEADER_L1))
+    HEADER_L2 = str(config.get("header_l2", HEADER_L2))
+    SUBHEADER = str(config.get("subheader", SUBHEADER))
+    ITEMS = [item.get("label", "") if isinstance(item, dict) else str(item) for item in config["items"]]
+    SEGS = [tuple(segment) for segment in config["segs"]]
+    if len(ITEMS) != 5 or any(len(segment) != 3 for segment in SEGS):
+        raise ValueError("TOP 5 config requires exactly five items and [start, end, item_index] segments")
 
 def ts(t):
     h = int(t // 3600); m = int(t % 3600 // 60); s = t % 60
@@ -72,9 +96,9 @@ def vf_chain(idx, seg_start, seg_end):
         filters.append("fade=t=in:st=0:d=0.25:color=white")
     # persistent 2-line header
     filters.append(f"drawbox=x=0:y=0:w=720:h=190:color=black@0.55:t=fill")
-    filters.append(f"drawtext=fontfile={FONT}:text='{esc('TOP 5 MOMEN')}':fontsize=58:fontcolor=yellow:borderw=5:bordercolor=black:x=(w-text_w)/2:y=22")
-    filters.append(f"drawtext=fontfile={FONT}:text='{esc('BOCOR ALUS')}':fontsize=58:fontcolor=yellow:borderw=5:bordercolor=black:x=(w-text_w)/2:y=92")
-    filters.append(f"drawtext=fontfile={FONT}:text='{esc('PRABOWO vs GIBRAN')}':fontsize=30:fontcolor=white:borderw=3:bordercolor=red:x=(w-text_w)/2:y=158")
+    filters.append(f"drawtext=fontfile={FONT}:text='{esc(HEADER_L1)}':fontsize=58:fontcolor=yellow:borderw=5:bordercolor=black:x=(w-text_w)/2:y=22")
+    filters.append(f"drawtext=fontfile={FONT}:text='{esc(HEADER_L2)}':fontsize=58:fontcolor=yellow:borderw=5:bordercolor=black:x=(w-text_w)/2:y=92")
+    filters.append(f"drawtext=fontfile={FONT}:text='{esc(SUBHEADER)}':fontsize=30:fontcolor=white:borderw=3:bordercolor=red:x=(w-text_w)/2:y=158")
     # numbered list sidebar (left), active item yellow+larger, others dimmed
     y0 = 260
     for i, item in enumerate(ITEMS):

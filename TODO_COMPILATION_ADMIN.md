@@ -1,6 +1,8 @@
 # TODO: Fitur Kompilasi TOP 5 di Admin UI
 
-> Planning doc — BELUM dieksekusi. Dibuat 2026-09-30. Agen berikutnya yang mengeksekusi harus baca file ini + skill `podcast-clipping` (section "Compilation Shorts") dulu.
+> Planning doc — fase build/preview Admin sudah mulai diimplementasikan; upload dan suggestions LLM masih terbuka. Dibuat 2026-09-30. Agen berikutnya yang melanjutkan harus baca file ini + skill `podcast-clipping` (section "Compilation Shorts") dulu.
+
+**Progress (2026-10-01):** `top5_compilation.py` sekarang menerima `--config` tanpa memutus mode manual lama. Admin sudah memiliki discovery workspace, endpoint transcript candidates, background build, status polling, dan preview route. Belum ada upload YouTube, quota queue, atau suggestions otomatis LLM.
 
 ## Konteks
 

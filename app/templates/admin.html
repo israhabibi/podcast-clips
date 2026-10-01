@@ -84,6 +84,27 @@
         </section>
 
         <section class="card">
+            <h2>TOP 5 compilation</h2>
+            <p>Pilih workspace episode, masukkan lima momen, lalu build preview lokal sebelum upload.</p>
+            <form id="compilation-form">
+                <label for="compilation-episode">Episode</label>
+                <select id="compilation-episode" required>
+                    <option value="">Pilih episode</option>
+                    {% for episode in compilation_episodes %}<option value="{{ episode.id }}">{{ episode.title }} ({{ episode.id }})</option>{% endfor %}
+                </select>
+                <label for="compilation-header">Header</label>
+                <input id="compilation-header" value="TOP 5 MOMEN" maxlength="80" required>
+                <label for="compilation-subheader">Subheader</label>
+                <input id="compilation-subheader" placeholder="Topik kompilasi" maxlength="120">
+                <div id="compilation-suggestions"></div>
+                <div id="compilation-items"></div>
+                <button type="submit">Build preview</button>
+                <p id="compilation-status" role="status" aria-live="polite"></p>
+            </form>
+            <video id="compilation-preview" controls playsinline hidden style="width:100%;max-height:520px"></video>
+        </section>
+
+        <section class="card">
             <h2>Add a YouTube episode</h2>
             <p>Tambahkan link ke antrean atau langsung mulai proses lokal. Hasil tetap lokal dan tidak otomatis dipublikasikan.</p>
             <form method="post" action="{{ url_for('admin_add_youtube_link') }}">
@@ -152,6 +173,86 @@
         }
 
         if (hasRunningJobs) setInterval(refreshJobProgress, 5000);
+
+        const compilationEpisode = document.querySelector("#compilation-episode");
+        const compilationItems = document.querySelector("#compilation-items");
+        const compilationForm = document.querySelector("#compilation-form");
+        const compilationStatus = document.querySelector("#compilation-status");
+        const compilationPreview = document.querySelector("#compilation-preview");
+        const compilationSuggestions = document.querySelector("#compilation-suggestions");
+        for (let index = 0; index < 5; index += 1) {
+            compilationItems.insertAdjacentHTML("beforeend", `
+                <div class="compilation-item">
+                    <label>Moment ${index + 1}</label>
+                    <input class="compilation-label" placeholder="Judul moment" maxlength="60" required>
+                    <input class="compilation-start" type="number" min="0" step="0.01" placeholder="Start (detik)" required>
+                    <input class="compilation-end" type="number" min="0" step="0.01" placeholder="End (detik)" required>
+                </div>`);
+        }
+        compilationEpisode.addEventListener("change", async () => {
+            compilationSuggestions.textContent = "Memuat transcript...";
+            const response = await fetch(`/admin/compilation/segments/${encodeURIComponent(compilationEpisode.value)}`);
+            const result = await response.json();
+            if (!response.ok) {
+                compilationSuggestions.textContent = result.error || "Transcript tidak tersedia.";
+                return;
+            }
+            compilationSuggestions.innerHTML = "<small>Pilih segmen untuk mengisi moment pertama yang kosong:</small>";
+            result.segments.slice(0, 80).forEach((segment) => {
+                const button = document.createElement("button");
+                button.type = "button";
+                button.className = "secondary";
+                button.style.margin = "4px";
+                button.textContent = `${segment.start.toFixed(1)}-${segment.end.toFixed(1)} ${segment.text.slice(0, 80)}`;
+                button.addEventListener("click", () => {
+                    const target = [...document.querySelectorAll(".compilation-item")].find((item) => !item.querySelector(".compilation-start").value);
+                    if (!target) return;
+                    target.querySelector(".compilation-start").value = segment.start;
+                    target.querySelector(".compilation-end").value = Math.min(segment.end + 40, segment.end + 40);
+                    target.querySelector(".compilation-label").value = segment.text.slice(0, 60);
+                });
+                compilationSuggestions.appendChild(button);
+            });
+        });
+        compilationForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const items = [...document.querySelectorAll(".compilation-item")].map((item) => ({
+                label: item.querySelector(".compilation-label").value,
+                start: item.querySelector(".compilation-start").value,
+                end: item.querySelector(".compilation-end").value,
+            }));
+            compilationStatus.textContent = "Build dimulai...";
+            const response = await fetch("{{ url_for('admin_compilation_build') }}", {
+                method: "POST",
+                headers: { "Content-Type": "application/json", Accept: "application/json" },
+                body: JSON.stringify({
+                    csrf_token: "{{ csrf_token }}",
+                    episode_id: compilationEpisode.value,
+                    header_l1: document.querySelector("#compilation-header").value,
+                    header_l2: compilationEpisode.options[compilationEpisode.selectedIndex]?.text || "",
+                    subheader: document.querySelector("#compilation-subheader").value,
+                    items,
+                }),
+            });
+            const result = await response.json();
+            if (!response.ok) {
+                compilationStatus.textContent = result.error || "Build gagal.";
+                return;
+            }
+            const poll = setInterval(async () => {
+                const statusResponse = await fetch(`/admin/compilation/status/${encodeURIComponent(compilationEpisode.value)}`);
+                const status = await statusResponse.json();
+                compilationStatus.textContent = status.status === "running" ? "Sedang merender..." : status.status;
+                if (status.status === "completed") {
+                    clearInterval(poll);
+                    compilationPreview.src = status.preview;
+                    compilationPreview.hidden = false;
+                    compilationPreview.load();
+                } else if (status.status === "failed") {
+                    clearInterval(poll);
+                }
+            }, 3000);
+        });
 
         const youtubeUrl = document.querySelector("#url");
         const podcastSelect = document.querySelector("#podcast");

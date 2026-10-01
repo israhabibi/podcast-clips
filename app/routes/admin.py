@@ -1,12 +1,15 @@
 """Password-protected account linking and manual YouTube submission page."""
 
 import os
+import json
 import re
+import secrets
 import subprocess
 import sys
+import time
 from pathlib import Path
 
-from flask import flash, jsonify, redirect, render_template, request, session, url_for
+from flask import flash, jsonify, redirect, render_template, request, send_file, session, url_for
 from werkzeug.security import check_password_hash
 
 from app import app
@@ -22,6 +25,7 @@ from app.config import (
 )
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+WORK_ROOT = Path("/tmp/podcast-clips")
 JOB_STAGES = {
     "download": ("Mengunduh video", 10),
     "curate": ("Memilih momen klip", 55),
@@ -71,6 +75,33 @@ def _submissions_with_progress():
     for item in rows:
         item["progress"] = _job_progress(item)
     return rows
+
+
+def _compilation_episodes():
+    episodes = []
+    if not WORK_ROOT.is_dir():
+        return episodes
+    for workdir in sorted(WORK_ROOT.iterdir(), reverse=True):
+        if not workdir.is_dir() or not (workdir / "source.mp4").is_file() or not (workdir / "transcript.json").is_file():
+            continue
+        title = workdir.name
+        episode_data = workdir / "episode_data.json"
+        if episode_data.is_file():
+            try:
+                title = json.loads(episode_data.read_text(encoding="utf-8")).get("episode_title") or title
+            except (OSError, json.JSONDecodeError):
+                pass
+        episodes.append({"id": workdir.name, "title": title})
+    return episodes
+
+
+def _compilation_workdir(episode_id):
+    if not episode_id or Path(episode_id).name != episode_id:
+        return None
+    workdir = WORK_ROOT / episode_id
+    if not workdir.is_dir() or not (workdir / "source.mp4").is_file() or not (workdir / "transcript.json").is_file():
+        return None
+    return workdir
 
 
 @app.after_request
@@ -129,6 +160,7 @@ def admin_page():
         csrf_token=csrf_token(),
         podcasts=PODCASTS,
         submissions=_submissions_with_progress(),
+        compilation_episodes=_compilation_episodes(),
         youtube_ready=bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET),
         tiktok_ready=bool(TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET),
         youtube_connected=os.path.exists(YOUTUBE_TOKEN_FILE),
@@ -148,6 +180,101 @@ def admin_jobs():
         for item in _submissions_with_progress()
     ]
     return jsonify(jobs=jobs)
+
+
+@app.route("/admin/compilation/segments/<episode_id>")
+@admin_required()
+def admin_compilation_segments(episode_id):
+    workdir = _compilation_workdir(episode_id)
+    if workdir is None:
+        return jsonify(error="Episode workspace not found."), 404
+    try:
+        transcript = json.loads((workdir / "transcript.json").read_text(encoding="utf-8"))
+        segments = [
+            {"start": float(segment["start"]), "end": float(segment["end"]), "text": str(segment["text"]).strip()}
+            for segment in transcript
+            if segment.get("text", "").strip()
+        ]
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return jsonify(error="Transcript is invalid."), 422
+    return jsonify(segments=segments)
+
+
+@app.route("/admin/compilation/build", methods=["POST"])
+@admin_required()
+def admin_compilation_build():
+    payload = request.get_json(silent=True) or {}
+    submitted_csrf = payload.get("csrf_token", "")
+    expected_csrf = session.get("admin_csrf", "")
+    if not expected_csrf or not isinstance(submitted_csrf, str) or not secrets.compare_digest(expected_csrf, submitted_csrf):
+        return jsonify(error="Invalid form token."), 400
+    workdir = _compilation_workdir(payload.get("episode_id"))
+    items = payload.get("items")
+    if workdir is None or not isinstance(items, list) or len(items) != 5:
+        return jsonify(error="Choose an episode and exactly five moments."), 400
+    try:
+        normalized_items = []
+        segments = []
+        for index, item in enumerate(items):
+            start = float(item["start"])
+            end = float(item["end"])
+            label = str(item.get("label", "")).strip()[:60]
+            if not label or start < 0 or end <= start:
+                raise ValueError
+            normalized_items.append({"label": label})
+            segments.append([start, end, index])
+    except (KeyError, TypeError, ValueError):
+        return jsonify(error="Each moment needs valid start, end, and label values."), 400
+
+    job_id = f"compilation-{workdir.name}-{int(time.time())}"
+    config_path = workdir / f".{job_id}.json"
+    output_path = workdir / "clips" / "top5_compilation.mp4"
+    config_path.write_text(json.dumps({
+        "header_l1": str(payload.get("header_l1", "TOP 5 MOMEN"))[:80],
+        "header_l2": str(payload.get("header_l2", ""))[:80],
+        "subheader": str(payload.get("subheader", ""))[:120],
+        "items": normalized_items,
+        "segs": segments,
+    }, ensure_ascii=False), encoding="utf-8")
+    log_dir = Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs"))
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log_path = log_dir / f"{job_id}.log"
+    command = [sys.executable, str(REPO_ROOT / "scripts" / "build_compilation.py"), str(workdir), str(output_path), str(config_path), str(log_path)]
+    try:
+        subprocess.Popen(command, cwd=str(REPO_ROOT), start_new_session=True,
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                         env={**os.environ, "PYTHONUNBUFFERED": "1"})
+    except OSError:
+        return jsonify(error="Could not start compilation worker."), 503
+    return jsonify(job_id=job_id, output=f"/admin/compilation/preview/{workdir.name}")
+
+
+@app.route("/admin/compilation/preview/<episode_id>")
+@admin_required()
+def admin_compilation_preview(episode_id):
+    workdir = _compilation_workdir(episode_id)
+    output_path = workdir / "clips" / "top5_compilation.mp4" if workdir else None
+    if output_path is None or not output_path.is_file():
+        return "Compilation not ready", 404
+    return send_file(output_path, mimetype="video/mp4", conditional=True)
+
+
+@app.route("/admin/compilation/status/<episode_id>")
+@admin_required()
+def admin_compilation_status(episode_id):
+    workdir = _compilation_workdir(episode_id)
+    if workdir is None:
+        return jsonify(status="invalid"), 404
+    output_path = workdir / "clips" / "top5_compilation.mp4"
+    if output_path.is_file():
+        return jsonify(status="completed", preview=url_for("admin_compilation_preview", episode_id=episode_id))
+    log_files = sorted(Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs")).glob(f"compilation-{episode_id}-*.log"))
+    if log_files:
+        log_text = log_files[-1].read_text(encoding="utf-8", errors="replace")
+        if "EXIT_CODE=" in log_text and not log_text.rstrip().endswith("EXIT_CODE=0"):
+            return jsonify(status="failed")
+        return jsonify(status="running")
+    return jsonify(status="idle")
 
 
 @app.route("/admin/youtube-metadata")

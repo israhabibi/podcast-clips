@@ -63,7 +63,7 @@ Move a task ID to **In progress** when work starts, to **Review** when its code 
 - **Priority:** P1
 - **Scope:** `scripts/top5_compilation.py`, `app/routes/admin.py`, `app/templates/admin.html`
 - **Depends on:** review gate and upload idempotency design
-- **Progress:** The manual TOP 5 builder exists in `scripts/top5_compilation.py`; the Admin UI, config input, preview route, and upload queue are not implemented. See [TODO_COMPILATION_ADMIN.md](TODO_COMPILATION_ADMIN.md).
+- **Progress:** The manual builder, config input, workspace discovery, transcript candidates, background build, status polling, and preview route are implemented and tested. Upload queue, review gate, quota handling, and LLM-assisted suggestions remain open. See [TODO_COMPILATION_ADMIN.md](TODO_COMPILATION_ADMIN.md).
 
 **Acceptance:**
 
