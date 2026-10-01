@@ -266,11 +266,17 @@ def admin_compilation_moments():
         return jsonify(error="LLM API key is not configured on the server."), 503
     try:
         transcript = json.loads((workdir / "transcript.json").read_text(encoding="utf-8"))
-        transcript_text = "\n".join(
+        transcript_lines = [
             f"[{float(segment['start']):.2f}-{float(segment['end']):.2f}] {segment['text']}"
             for segment in transcript
             if str(segment.get("text", "")).strip()
-        )
+        ]
+        transcript_text = "\n".join(transcript_lines)
+        max_prompt_chars = 60000
+        if len(transcript_text) > max_prompt_chars:
+            step = max(1, len(transcript_lines) // 600)
+            sampled_lines = transcript_lines[::step]
+            transcript_text = "\n".join(sampled_lines)[:max_prompt_chars]
         prompt = (
             "Pilih maksimal 10 momen punchline dari transkrip podcast Indonesia berikut untuk kompilasi TOP 5. "
             "Kembalikan HANYA JSON array berisi objek start, end, title, reason. "
@@ -287,7 +293,7 @@ def admin_compilation_moments():
             data=request_body,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(llm_request, timeout=120) as response:
+        with urllib.request.urlopen(llm_request, timeout=45) as response:
             content = json.load(response)["choices"][0]["message"]["content"].strip()
         candidates = json.loads(content[content.index("["):content.rindex("]") + 1])
         normalized = []

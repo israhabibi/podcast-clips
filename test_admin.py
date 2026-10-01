@@ -259,6 +259,31 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(len(response.get_json()["candidates"]), 1)
         self.assertEqual(response.get_json()["candidates"][0]["title"], "Valid")
 
+    def test_compilation_moments_limits_long_transcript_prompt(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        work_root = Path(self.tempdir.name) / "work"
+        workdir = work_root / "episode-long"
+        workdir.mkdir(parents=True)
+        (workdir / "source.mp4").write_bytes(b"source")
+        transcript = [{"start": index * 2, "end": index * 2 + 1, "text": "kata " * 30} for index in range(1000)]
+        (workdir / "transcript.json").write_text(json.dumps(transcript), encoding="utf-8")
+        llm_payload = json.dumps({"choices": [{"message": {"content": "[]"}}]}).encode()
+        response_mock = Mock()
+        response_mock.__enter__ = Mock(return_value=response_mock)
+        response_mock.__exit__ = Mock(return_value=False)
+        response_mock.read.return_value = llm_payload
+        with patch.object(admin_routes, "WORK_ROOT", work_root), \
+             patch.dict(os.environ, {"HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY": "test-key"}), \
+             patch.object(admin_routes.urllib.request, "urlopen", return_value=response_mock) as open_url:
+            response = self.client.post("/admin/compilation/moments", json={
+                "csrf_token": self.csrf(), "episode_id": "episode-long",
+            })
+        self.assertEqual(response.status_code, 200)
+        prompt = open_url.call_args.args[0].data.decode()
+        self.assertLessEqual(len(prompt), 70000)
+
     def test_clip_upload_records_mocked_success(self):
         import app.routes.admin as admin_routes
 
