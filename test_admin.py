@@ -259,6 +259,46 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(len(response.get_json()["candidates"]), 1)
         self.assertEqual(response.get_json()["candidates"][0]["title"], "Valid")
 
+    def test_clip_upload_records_mocked_success(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        clip_path = Path(self.tempdir.name) / "clip01.mp4"
+        clip_path.write_bytes(b"video")
+        caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Test caption"}
+        result = {"video_id": "youtube123", "url": "https://youtube.com/watch?v=youtube123"}
+        with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "get_youtube_upload", return_value=None), \
+             patch.object(admin_routes, "record_youtube_upload") as record, \
+             patch("scripts.youtube_upload.upload_clip", return_value=result) as upload:
+            response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={"csrf_token": self.csrf()})
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(upload.call_args.args[1:3], ("Test Clip", "Test caption"))
+        self.assertEqual(record.call_args_list[-1].args[:4], ("bocor-alus", "episode-one", "1", "uploaded"))
+
+    def test_clip_upload_marks_quota_without_retry(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        clip_path = Path(self.tempdir.name) / "clip01.mp4"
+        clip_path.write_bytes(b"video")
+        caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Test caption"}
+        with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "get_youtube_upload", return_value=None), \
+             patch.object(admin_routes, "record_youtube_upload") as record, \
+             patch("scripts.youtube_upload.upload_clip", side_effect=RuntimeError("uploadLimitExceeded")) as upload:
+            response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={"csrf_token": self.csrf()})
+        self.assertEqual(response.status_code, 302)
+        upload.assert_called_once()
+        self.assertEqual(record.call_args_list[-1].args[:4], ("bocor-alus", "episode-one", "1", "quota"))
+
+    def test_clip_upload_requires_csrf_and_admin(self):
+        response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload")
+        self.assertEqual(response.status_code, 302)
+        self.login()
+        response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload")
+        self.assertEqual(response.status_code, 400)
+
     def test_process_action_starts_worker_and_marks_submission_in_progress(self):
         from app.admin_store import list_submissions
         self.login()

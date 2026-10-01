@@ -84,6 +84,33 @@
         </section>
 
         <section class="card">
+            <h2>YouTube clips</h2>
+            <p>Upload satu per satu setelah review. Judul dan caption diambil dari gallery.</p>
+            {% if deployed_clips %}
+                <div class="table-wrap"><table>
+                    <thead><tr><th>Episode</th><th>Clip</th><th>Status</th><th>Action</th></tr></thead>
+                    <tbody>
+                        {% for clip in deployed_clips %}
+                            <tr>
+                                <td>{{ clip.podcast }} / {{ clip.episode }}</td>
+                                <td>{{ clip.clip_num }}. {{ clip.title }}</td>
+                                <td>{{ clip.upload.status if clip.upload else 'Belum di-upload' }}{% if clip.upload and clip.upload.video_id %}<br><small>{{ clip.upload.video_id }}</small>{% endif %}</td>
+                                <td>
+                                    {% if not clip.upload or clip.upload.status != 'uploaded' %}
+                                        <form method="post" action="{{ url_for('admin_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                            <button type="submit">Upload ke YouTube</button>
+                                        </form>
+                                    {% endif %}
+                                </td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table></div>
+            {% else %}<p>Belum ada clip di gallery.</p>{% endif %}
+        </section>
+
+        <section class="card">
             <h2>TOP 5 compilation</h2>
             <p>Pilih workspace episode, masukkan lima momen, lalu build preview lokal sebelum upload.</p>
             <form id="compilation-form">

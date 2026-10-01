@@ -19,6 +19,7 @@ from app.admin_security import admin_configured, admin_required, check_csrf, csr
 from app.admin_store import (
     PODCASTS, add_submission, clear_login_attempts, login_blocked,
     recent_submissions, record_failed_login, set_submission_status,
+    record_youtube_upload, get_youtube_upload,
 )
 from app.youtube_metadata import MetadataLookupError, get_youtube_video_metadata
 from app.config import (
@@ -106,6 +107,52 @@ def _compilation_workdir(episode_id):
     return workdir
 
 
+def _deployed_clip(podcast, episode, clip_num):
+    if podcast not in PODCASTS or Path(episode).name != episode or not str(clip_num).isdigit():
+        return None
+
+
+def _deployed_clips():
+    root = REPO_ROOT / "app" / "static" / "clips"
+    clips = []
+    if not root.is_dir():
+        return clips
+    for podcast_dir in sorted(root.iterdir()):
+        if not podcast_dir.is_dir() or podcast_dir.name not in PODCASTS:
+            continue
+        for episode_dir in sorted(podcast_dir.iterdir(), reverse=True):
+            captions_path = episode_dir / "captions.json"
+            if not episode_dir.is_dir() or not captions_path.is_file():
+                continue
+            try:
+                captions = json.loads(captions_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            for clip_num, caption in captions.items():
+                if str(clip_num).isdigit() and (episode_dir / str(caption.get("clip", ""))).is_file():
+                    clips.append({
+                        "podcast": podcast_dir.name,
+                        "episode": episode_dir.name,
+                        "clip_num": str(clip_num),
+                        "title": caption.get("title", f"Clip {clip_num}"),
+                        "upload": get_youtube_upload(podcast_dir.name, episode_dir.name, clip_num),
+                    })
+    return clips
+    episode_dir = REPO_ROOT / "app" / "static" / "clips" / podcast / episode
+    captions_path = episode_dir / "captions.json"
+    if not episode_dir.is_dir() or not captions_path.is_file():
+        return None
+    try:
+        captions = json.loads(captions_path.read_text(encoding="utf-8"))
+        caption = captions[str(clip_num)]
+        clip_path = episode_dir / str(caption["clip"])
+        if clip_path.parent != episode_dir or not clip_path.is_file():
+            return None
+        return clip_path, caption
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return None
+
+
 @app.after_request
 def protect_admin_responses(response):
     if request.path.startswith("/admin") or request.path in ("/auth", "/oauth", "/tiktok-auth", "/tiktok-oauth"):
@@ -163,6 +210,7 @@ def admin_page():
         podcasts=PODCASTS,
         submissions=_submissions_with_progress(),
         compilation_episodes=_compilation_episodes(),
+        deployed_clips=_deployed_clips(),
         youtube_ready=bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET),
         tiktok_ready=bool(TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET),
         youtube_connected=os.path.exists(YOUTUBE_TOKEN_FILE),
@@ -335,6 +383,41 @@ def admin_compilation_status(episode_id):
             return jsonify(status="failed")
         return jsonify(status="running")
     return jsonify(status="idle")
+
+
+@app.route("/admin/clips/<podcast>/<episode>/<clip_num>/upload", methods=["POST"])
+@admin_required()
+def admin_upload_clip(podcast, episode, clip_num):
+    if not check_csrf():
+        return "Invalid form token.", 400
+    clip = _deployed_clip(podcast, episode, clip_num)
+    if clip is None:
+        flash("Clip or caption not found.", "error")
+        return redirect(url_for("admin_page"))
+    existing = get_youtube_upload(podcast, episode, clip_num)
+    if existing and existing["status"] == "uploaded":
+        flash(f"Clip sudah di-upload: {existing['video_id']}", "success")
+        return redirect(url_for("admin_page"))
+    clip_path, caption = clip
+    record_youtube_upload(podcast, episode, clip_num, "uploading")
+    tags = ["shorts", "podcast", "indonesia", podcast, "tempo", "berita", "politik", "viral", "fyp", "news", "video", "opini", "analisis", "terkini", "podcastindonesia"]
+    try:
+        from scripts.youtube_upload import upload_clip
+        result = upload_clip(clip_path, caption.get("title", f"Clip {clip_num}"), caption.get("caption", "").strip(), tags=tags)
+        if "error" in result:
+            message = result["error"]
+            status = "quota" if "uploadLimitExceeded" in message else "failed"
+            record_youtube_upload(podcast, episode, clip_num, status, error=message)
+            flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
+        else:
+            record_youtube_upload(podcast, episode, clip_num, "uploaded", video_id=result.get("video_id"))
+            flash(f"Upload berhasil: {result.get('url', result.get('video_id', ''))}", "success")
+    except Exception as exc:
+        message = str(exc)
+        status = "quota" if "uploadLimitExceeded" in message else "failed"
+        record_youtube_upload(podcast, episode, clip_num, status, error=message)
+        flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
+    return redirect(url_for("admin_page"))
 
 
 @app.route("/admin/youtube-metadata")

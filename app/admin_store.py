@@ -70,6 +70,19 @@ def _connect():
             blocked_until INTEGER NOT NULL
         )"""
     )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS youtube_uploads (
+            id INTEGER PRIMARY KEY,
+            podcast TEXT NOT NULL,
+            episode TEXT NOT NULL,
+            clip_num TEXT NOT NULL,
+            video_id TEXT,
+            status TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(podcast, episode, clip_num)
+        )"""
+    )
     return connection
 
 
@@ -124,6 +137,40 @@ def list_submissions(status=None, limit=None):
 
 def recent_submissions(limit=50):
     return list_submissions(limit=limit)
+
+
+def record_youtube_upload(podcast, episode, clip_num, status, video_id=None, error=""):
+    if podcast not in PODCASTS or not episode or not str(clip_num).isdigit():
+        raise ValueError("Invalid upload identity.")
+    if status not in ("uploading", "uploaded", "quota", "failed"):
+        raise ValueError("Invalid upload status.")
+    connection = _connect()
+    try:
+        with connection:
+            connection.execute(
+                """INSERT INTO youtube_uploads
+                   (podcast, episode, clip_num, video_id, status, error, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(podcast, episode, clip_num) DO UPDATE SET
+                   video_id=excluded.video_id, status=excluded.status,
+                   error=excluded.error, created_at=excluded.created_at""",
+                (podcast, episode, str(clip_num), video_id, status, error[:500], datetime.now(timezone.utc).isoformat()),
+            )
+    finally:
+        connection.close()
+
+
+def get_youtube_upload(podcast, episode, clip_num):
+    connection = _connect()
+    try:
+        row = connection.execute(
+            "SELECT podcast, episode, clip_num, video_id, status, error, created_at "
+            "FROM youtube_uploads WHERE podcast = ? AND episode = ? AND clip_num = ?",
+            (podcast, episode, str(clip_num)),
+        ).fetchone()
+    finally:
+        connection.close()
+    return dict(row) if row else None
 
 
 def set_submission_status(video_id, status):
