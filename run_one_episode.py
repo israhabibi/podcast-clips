@@ -150,6 +150,11 @@ def main():
     if not transcript_path.exists() or transcript_path.stat().st_size < 20:
         raise RuntimeError('Transcript generation produced no usable data')
 
+    # laughter/audio-burst signal for curate (optional — curate skips if laughter.json missing)
+    try:
+        step('laughter', [sys.executable, 'scripts/laughter_score.py', str(episode_dir)], env)
+    except RuntimeError as exc:
+        print(f"[laughter] skipped: {exc}", file=sys.stderr)
     step('curate', [sys.executable, 'curate.py', 'MiniMax-M2.7-highspeed', podcast_slug, episode_title], env)
     step('cut', [sys.executable, 'cut_smart.py', str(source)], env)
     # Minimal search_results placeholder to let caption.py run without failing.

@@ -37,7 +37,25 @@ with open(WORK_DIR / "transcript.json") as f:
 
 transcript_text = format_timed_transcript(segs)
 
-prompt = f"""Kamu editor clip podcast. Dibawah ini transkrip podcast berbahasa Indonesia dengan timestamp.
+# Laughter signal (audio burst detection) — hint the LLM where the room exploded
+laughter_hint = ""
+laughter_file = WORK_DIR / "laughter.json"
+if laughter_file.exists():
+    try:
+        ldata = json.loads(laughter_file.read_text())
+        bursts = ldata.get("bursts", [])
+        if bursts:
+            # merge adjacent bursts and map to readable ranges
+            ranges = ", ".join(f"{a}-{b}d" for a, b, _ in bursts[:40])
+            laughter_hint = f"""
+SINYAL AUDIO (deteksi ketawa/tawa kerumunan dari analisis loudness — rentang detik dengan energy burst tinggi):
+{ranges}
+Momen dengan burst ketawa biasanya adalah punchline terbaik. Prioritaskan rentang yang memiliki burst di dalamnya atau tepat setelahnya (ketawa = payoff). Klip TANPA burst hanya pilih kalimat benar-benar kuat secara naratif.
+"""
+    except Exception:
+        laughter_hint = ""
+
+prompt = f"""Kamu editor clip podcast. Dibawah ini transkrip podcast berbahasa Indonesia dengan timestamp.{laughter_hint}
 
 Tugas kamuhasilkan SATUSATU respons JSON dengan tiga field:
 1. "episode_summary": ringkasan episode 3-5 kalimat (untuk web gallery, buat orang paham episode ini tentang apa)
