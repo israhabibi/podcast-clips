@@ -48,3 +48,47 @@ Pipeline sudah punya builder kompilasi TOP 5 yang working & user-approved:
 2. Video hasil identik kualitasnya dengan builder manual (header persistent, highlight aktif, subtitle, SFX).
 3. Upload menghasilkan metadata lengkap (judul benar tanpa #Shorts dobel, description + 15 tags terverifikasi via `videos().list` setelah update).
 4. Job gagal → status error tampil di UI, bukan silent no-op.
+
+---
+
+# TAMBAHAN (1 Okt 2026): Tombol Upload YouTube per-clip di Admin UI
+
+Fitur kedua yang harus dibangun agen berikutnya, satu paket dengan form kompilasi di atas (sama-sama butuh route upload + handle kuota).
+
+## Konteks
+
+- Upload YouTube selama ini lewat Hermes CLI (`scripts/youtube_upload.py`) — user sekarang sering upload manual dari UI karena kuota channel kecil.
+- Kuota channel: `uploadLimitExceeded` muncul pada ~5 video/24 jam (channel muda; naik seiring waktu). HARUS di-handle di UI, bukan cuma error mentah.
+- 10 clip episode Manuver UU Pemilu (2026-10-01) belum masuk YouTube karena limit ini — jadi tombol upload + antrian retry itu langsung kepake.
+
+## Yang harus dibangun
+
+### 1. Route: `POST /admin/clips/<episode>/<clip_num>/upload`
+- Import `upload_clip()` dari `scripts/youtube_upload.py` langsung (jangan subprocess).
+- Source of truth untuk title/caption: `captions.json` di folder episode (deploy dir `app/static/clips/<podcast>/<episode>/` ATAU workdir `/tmp/podcast-clips/<id>/`). Judul dari `captions.json[num]['title']`, caption dari `['caption'].strip()` (strip leading newline — caption.py prefix `\n\n`).
+- `#Shorts` di-append otomatis oleh upload_clip — JANGAN ditambahkan di UI.
+- Setelah upload sukses: update deskripsi + tags via **raw REST** (googleapiclient `videos().update` diam-diam buang tags — lihat pitfall di bawah). Tags default 15 sesuai skill section "Searchable metadata".
+- Catat ke `youtube_submissions` (tabel sudah ada di `app/data/admin.sqlite3`).
+
+### 2. Handle kuota `uploadLimitExceeded`
+- Bila ResumableUploadError 400 `uploadLimitExceeded`: JANGAN retry otomatis bareng. Tampilkan status "Kuota harian habis — retry besok" di UI + opsi "Jadwalkan retry" yang menulis ke tabel antrian sederhana (bisa table baru `upload_queue` di sqlite yang sama: episode, clip_num, status queued/failed/done, retry_at).
+- Sebuah langkah kecil (bisa cron job user-side atau tombol "Proses antrian" di UI) memproses antrian saat kuota reset.
+- Sebelum retry, cek dulu apakah clip sudah terlanjur masuk (upload terputus bisa meninggalkan video live): `search().list(forMine=True, order='date')` dan hapus duplikat sebelum upload ulang.
+
+### 3. Frontend
+- Di halaman episode admin, tiap clip card dapat tombol "Upload ke YouTube" + status badge (belum / queued / uploaded <video_id> / failed <reason>).
+- Tombol "Upload semua" dengan progress per clip (1 per 5 detik delay untuk hindari rate limit API, bukan kuota).
+- Setelah upload sukses, tampilkan link youtube.com/watch?v=<id>.
+
+## Pitfalls tambahan (semua sudah kejadian nyata, Oct 2026)
+
+- `videos().update()` via googleapiclient mengembalikan 200 TAPI tags jadi None. Solusi terverifikasi: refresh token manual → `requests.put('https://www.googleapis.com/youtube/v3/videos?part=snippet', json=body)` dengan title+description+categoryId+tags sekaligus.
+- Upload yang terputus (network / restart) bisa meninggalkan video duplikat di channel. Sebelum retry apapun, cek `search().list(forMine=True, order='date', maxResults=10)` dan hapus video dengan judul identik.
+- Kuota upload ≠ kuota API. Kuota API (10.000 unit/hari) hampir mustahil habis untuk upload <100 video. Yang habis itu upload limit per-channel (~5/hari untuk channel muda).
+- `#Shorts` dobel terjadi 2x — upload_clip sudah auto-append, UI tidak boleh menambah lagi.
+
+## Acceptance criteria tambahan
+
+5. Upload satu clip dari UI → video live dengan judul benar (tanpa #Shorts dobel), description berisi caption + 3 link, tags ≥10 terverifikasi.
+6. Saat kena uploadLimitExceeded → status jelas di UI, clip masuk antrian, tidak ada retry spam.
+7. Riwayat upload (video_id, timestamp) tercatat di youtube_submissions.
