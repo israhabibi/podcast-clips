@@ -130,7 +130,10 @@
                 <button type="submit">Build preview</button>
                 <p id="compilation-status" role="status" aria-live="polite"></p>
             </form>
-            <video id="compilation-preview" controls playsinline hidden style="width:100%;max-height:520px"></video>
+            <div id="compilation-preview-actions" hidden>
+                <a id="compilation-preview-link" class="button" target="_blank" rel="noopener noreferrer">Buka preview di tab baru</a>
+            </div>
+            <video id="compilation-preview" controls preload="metadata" playsinline hidden style="display:block;width:100%;max-height:520px;background:#000"></video>
         </section>
 
         <section class="card">
@@ -208,6 +211,8 @@
         const compilationForm = document.querySelector("#compilation-form");
         const compilationStatus = document.querySelector("#compilation-status");
         const compilationPreview = document.querySelector("#compilation-preview");
+        const compilationPreviewActions = document.querySelector("#compilation-preview-actions");
+        const compilationPreviewLink = document.querySelector("#compilation-preview-link");
         const compilationSuggestions = document.querySelector("#compilation-suggestions");
         const compilationSuggest = document.querySelector("#compilation-suggest");
         const compilationSuggestStatus = document.querySelector("#compilation-suggest-status");
@@ -303,8 +308,11 @@
                 compilationStatus.textContent = status.status === "running" ? "Sedang merender..." : status.status;
                 if (status.status === "completed") {
                     clearInterval(poll);
-                    compilationPreview.src = status.preview;
+                    const previewUrl = `${status.preview}?v=${Date.now()}`;
+                    compilationPreview.src = previewUrl;
                     compilationPreview.hidden = false;
+                    compilationPreviewActions.hidden = false;
+                    compilationPreviewLink.href = previewUrl;
                     compilationPreview.load();
                 } else if (status.status === "failed") {
                     clearInterval(poll);
