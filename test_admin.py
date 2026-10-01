@@ -230,6 +230,35 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.get_json()["segments"][0]["text"], "Hook pertama")
 
+    def test_compilation_moments_uses_mocked_llm_and_filters_candidates(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        work_root = Path(self.tempdir.name) / "work"
+        workdir = work_root / "episode-one"
+        workdir.mkdir(parents=True)
+        (workdir / "source.mp4").write_bytes(b"source")
+        (workdir / "transcript.json").write_text(json.dumps([
+            {"start": 0, "end": 40, "text": "Momen pertama"},
+        ]), encoding="utf-8")
+        llm_payload = json.dumps({"choices": [{"message": {"content": json.dumps([
+            {"start": 0, "end": 40, "title": "Valid", "reason": "Payoff"},
+            {"start": 1, "end": 10, "title": "Too short", "reason": "Skip"},
+        ])}}]}).encode()
+        response_mock = Mock()
+        response_mock.__enter__ = Mock(return_value=response_mock)
+        response_mock.__exit__ = Mock(return_value=False)
+        response_mock.read.return_value = llm_payload
+        with patch.object(admin_routes, "WORK_ROOT", work_root), \
+             patch.dict(os.environ, {"HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY": "test-key"}), \
+             patch.object(admin_routes.urllib.request, "urlopen", return_value=response_mock):
+            response = self.client.post("/admin/compilation/moments", json={
+                "csrf_token": self.csrf(), "episode_id": "episode-one",
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.get_json()["candidates"]), 1)
+        self.assertEqual(response.get_json()["candidates"][0]["title"], "Valid")
+
     def test_process_action_starts_worker_and_marks_submission_in_progress(self):
         from app.admin_store import list_submissions
         self.login()

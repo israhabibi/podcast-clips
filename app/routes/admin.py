@@ -7,6 +7,8 @@ import secrets
 import subprocess
 import sys
 import time
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 from flask import flash, jsonify, redirect, render_template, request, send_file, session, url_for
@@ -198,6 +200,64 @@ def admin_compilation_segments(episode_id):
     except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         return jsonify(error="Transcript is invalid."), 422
     return jsonify(segments=segments)
+
+
+@app.route("/admin/compilation/moments", methods=["POST"])
+@admin_required()
+def admin_compilation_moments():
+    payload = request.get_json(silent=True) or {}
+    submitted_csrf = payload.get("csrf_token", "")
+    expected_csrf = session.get("admin_csrf", "")
+    if not expected_csrf or not isinstance(submitted_csrf, str) or not secrets.compare_digest(expected_csrf, submitted_csrf):
+        return jsonify(error="Invalid form token."), 400
+    workdir = _compilation_workdir(payload.get("episode_id"))
+    if workdir is None:
+        return jsonify(error="Episode workspace not found."), 404
+    api_key = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
+    if not api_key:
+        return jsonify(error="LLM API key is not configured on the server."), 503
+    try:
+        transcript = json.loads((workdir / "transcript.json").read_text(encoding="utf-8"))
+        transcript_text = "\n".join(
+            f"[{float(segment['start']):.2f}-{float(segment['end']):.2f}] {segment['text']}"
+            for segment in transcript
+            if str(segment.get("text", "")).strip()
+        )
+        prompt = (
+            "Pilih maksimal 10 momen punchline dari transkrip podcast Indonesia berikut untuk kompilasi TOP 5. "
+            "Kembalikan HANYA JSON array berisi objek start, end, title, reason. "
+            "Start/end harus tepat pada batas segmen, durasi 35-75 detik, jangan mengarang konteks.\n\n"
+            + transcript_text
+        )
+        request_body = json.dumps({
+            "model": "MiniMax-M2.7-highspeed",
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+        }).encode()
+        llm_request = urllib.request.Request(
+            "https://ai.sumopod.com/v1/chat/completions",
+            data=request_body,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        )
+        with urllib.request.urlopen(llm_request, timeout=120) as response:
+            content = json.load(response)["choices"][0]["message"]["content"].strip()
+        candidates = json.loads(content[content.index("["):content.rindex("]") + 1])
+        normalized = []
+        for candidate in candidates[:10]:
+            start = float(candidate["start"])
+            end = float(candidate["end"])
+            if start < 0 or end <= start or end - start < 35 or end - start > 75:
+                continue
+            normalized.append({
+                "start": start,
+                "end": end,
+                "title": str(candidate.get("title", "Moment"))[:60],
+                "reason": str(candidate.get("reason", ""))[:160],
+            })
+        return jsonify(candidates=normalized)
+    except (OSError, urllib.error.URLError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        app.logger.warning("Compilation moment suggestion failed: %s", exc)
+        return jsonify(error="Moment suggestions could not be generated."), 502
 
 
 @app.route("/admin/compilation/build", methods=["POST"])
