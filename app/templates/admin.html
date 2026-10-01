@@ -243,7 +243,9 @@
                 slot.querySelector(".compilation-end").value = candidate.end;
                 slot.querySelector(".compilation-label").value = candidate.title;
             });
-            compilationSuggestStatus.textContent = `${result.candidates.length} kandidat ditemukan. Review sebelum build.`;
+            compilationSuggestStatus.textContent = result.warning
+                ? `${result.candidates.length} kandidat fallback ditemukan. Review sebelum build.`
+                : `${result.candidates.length} kandidat ditemukan. Review sebelum build.`;
         });
         compilationEpisode.addEventListener("change", async () => {
             compilationSuggestions.textContent = "Memuat transcript...";

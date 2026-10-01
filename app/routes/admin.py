@@ -138,6 +138,32 @@ def _deployed_clips():
                         "upload": get_youtube_upload(podcast_dir.name, episode_dir.name, clip_num),
                     })
     return clips
+
+
+def _fallback_compilation_moments(transcript, limit=10):
+    candidates = []
+    index = 0
+    while index < len(transcript) and len(candidates) < limit:
+        try:
+            start = float(transcript[index]["start"])
+            end_index = index
+            while end_index + 1 < len(transcript) and float(transcript[end_index]["end"]) - start < 45:
+                end_index += 1
+            end = float(transcript[end_index]["end"])
+            if 35 <= end - start <= 75:
+                text = str(transcript[index].get("text", "")).strip()
+                candidates.append({
+                    "start": start,
+                    "end": end,
+                    "title": text[:60] or f"Moment {len(candidates) + 1}",
+                    "reason": "Kandidat otomatis dari rentang transcript; review sebelum build.",
+                })
+                index = end_index + 1
+            else:
+                index += 1
+        except (KeyError, TypeError, ValueError):
+            index += 1
+    return candidates
     episode_dir = REPO_ROOT / "app" / "static" / "clips" / podcast / episode
     captions_path = episode_dir / "captions.json"
     if not episode_dir.is_dir() or not captions_path.is_file():
@@ -293,7 +319,7 @@ def admin_compilation_moments():
             data=request_body,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         )
-        with urllib.request.urlopen(llm_request, timeout=45) as response:
+        with urllib.request.urlopen(llm_request, timeout=20) as response:
             content = json.load(response)["choices"][0]["message"]["content"].strip()
         candidates = json.loads(content[content.index("["):content.rindex("]") + 1])
         normalized = []
@@ -309,6 +335,9 @@ def admin_compilation_moments():
                 "reason": str(candidate.get("reason", ""))[:160],
             })
         return jsonify(candidates=normalized)
+    except TimeoutError:
+        fallback = _fallback_compilation_moments(transcript)
+        return jsonify(candidates=fallback, source="transcript-fallback", warning="LLM timeout; kandidat dibuat dari transcript.")
     except (OSError, urllib.error.URLError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         app.logger.warning("Compilation moment suggestion failed: %s", exc)
         return jsonify(error="Moment suggestions could not be generated."), 502
