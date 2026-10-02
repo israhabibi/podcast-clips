@@ -19,7 +19,8 @@ from app.admin_security import admin_configured, admin_required, check_csrf, csr
 from app.admin_store import (
     PODCASTS, add_submission, clear_login_attempts, login_blocked,
     recent_submissions, record_failed_login, set_submission_status,
-    record_youtube_upload, get_youtube_upload,
+    record_youtube_upload, get_youtube_upload, record_manual_upload,
+    deployed_clip_metadata,
 )
 from app.youtube_metadata import MetadataLookupError, get_youtube_video_metadata
 from app.config import (
@@ -110,6 +111,19 @@ def _compilation_workdir(episode_id):
 def _deployed_clip(podcast, episode, clip_num):
     if podcast not in PODCASTS or Path(episode).name != episode or not str(clip_num).isdigit():
         return None
+    episode_dir = REPO_ROOT / "app" / "static" / "clips" / podcast / episode
+    captions_path = episode_dir / "captions.json"
+    if not episode_dir.is_dir() or not captions_path.is_file():
+        return None
+    try:
+        captions = json.loads(captions_path.read_text(encoding="utf-8"))
+        caption = captions[str(clip_num)]
+        clip_path = episode_dir / str(caption["clip"])
+        if clip_path.parent != episode_dir or not clip_path.is_file():
+            return None
+        return clip_path, caption
+    except (OSError, KeyError, TypeError, json.JSONDecodeError):
+        return None
 
 
 def _deployed_clips():
@@ -128,15 +142,50 @@ def _deployed_clips():
                 captions = json.loads(captions_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
+            if not isinstance(captions, dict):
+                continue
             for clip_num, caption in captions.items():
-                if str(clip_num).isdigit() and (episode_dir / str(caption.get("clip", ""))).is_file():
-                    clips.append({
-                        "podcast": podcast_dir.name,
-                        "episode": episode_dir.name,
-                        "clip_num": str(clip_num),
-                        "title": caption.get("title", f"Clip {clip_num}"),
-                        "upload": get_youtube_upload(podcast_dir.name, episode_dir.name, clip_num),
-                    })
+                if not (str(clip_num).isdigit() and isinstance(caption, dict)):
+                    continue
+                clip_name = str(caption.get("clip", "") or "")
+                if not (Path(clip_name).name == clip_name and (episode_dir / clip_name).is_file()):
+                    continue
+                manual_meta = deployed_clip_metadata(
+                    podcast_dir.name, episode_dir.name, clip_num, caption=caption,
+                )
+                clips.append({
+                    "podcast": podcast_dir.name,
+                    "episode": episode_dir.name,
+                    "clip_num": str(clip_num),
+                    "title": caption.get("title", f"Clip {clip_num}"),
+                    "upload": get_youtube_upload(podcast_dir.name, episode_dir.name, clip_num),
+                    "manual": manual_meta,
+                })
+                # --- Auto-generate the companion .metadata.json next to the clip once, if missing
+                # (so even without going through manual form, users can copy-paste directly from disk)
+                if manual_meta and not (episode_dir / "captions.json").with_name(Path(manual_meta["video_filename"]).name + ".metadata.json").exists():
+                    try:
+                        clip_path = Path(manual_meta["video_path"])
+                        out = clip_path.parent / (clip_path.name + ".metadata.json")
+                        if not out.exists():
+                            payload = {
+                                "podcast": podcast_dir.name,
+                                "episode": episode_dir.name,
+                                "clip_num": int(clip_num) if str(clip_num).isdigit() else str(clip_num),
+                                "source_mp4": manual_meta["video_filename"],
+                                "source_mp4_size_bytes": manual_meta["file_size"],
+                                "source_mp4_size_mb": manual_meta["file_size_mb"],
+                                "source_mp4_sha256": manual_meta["sha256"],
+                                "title": manual_meta["title"],
+                                "title_plain": manual_meta["title_plain"],
+                                "description": manual_meta["description"],
+                                "tags": manual_meta["tags"],
+                                "tags_csv": manual_meta["tags_csv"],
+                                "category_id": 25,
+                            }
+                            out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+                    except OSError:
+                        pass
     return clips
 
 
@@ -164,19 +213,6 @@ def _fallback_compilation_moments(transcript, limit=10):
         except (KeyError, TypeError, ValueError):
             index += 1
     return candidates
-    episode_dir = REPO_ROOT / "app" / "static" / "clips" / podcast / episode
-    captions_path = episode_dir / "captions.json"
-    if not episode_dir.is_dir() or not captions_path.is_file():
-        return None
-    try:
-        captions = json.loads(captions_path.read_text(encoding="utf-8"))
-        caption = captions[str(clip_num)]
-        clip_path = episode_dir / str(caption["clip"])
-        if clip_path.parent != episode_dir or not clip_path.is_file():
-            return None
-        return clip_path, caption
-    except (OSError, KeyError, TypeError, json.JSONDecodeError):
-        return None
 
 
 @app.after_request
@@ -430,11 +466,16 @@ def admin_upload_clip(podcast, episode, clip_num):
         flash("Clip or caption not found.", "error")
         return redirect(url_for("admin_page"))
     existing = get_youtube_upload(podcast, episode, clip_num)
-    if existing and existing["status"] == "uploaded":
-        flash(f"Clip sudah di-upload: {existing['video_id']}", "success")
+    if existing and existing.get("status") in ("uploaded", "manual"):
+        vid = existing.get("video_id") or ""
+        flash(f"Clip sudah di-upload ({existing['status']}): {vid}", "success")
         return redirect(url_for("admin_page"))
     clip_path, caption = clip
-    record_youtube_upload(podcast, episode, clip_num, "uploading")
+    meta = deployed_clip_metadata(podcast, episode, clip_num, caption=caption, clip_path=clip_path) or {}
+    record_youtube_upload(
+        podcast, episode, clip_num, "uploading",
+        sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0),
+    )
     tags = ["shorts", "podcast", "indonesia", podcast, "tempo", "berita", "politik", "viral", "fyp", "news", "video", "opini", "analisis", "terkini", "podcastindonesia"]
     try:
         from scripts.youtube_upload import upload_clip
@@ -442,16 +483,77 @@ def admin_upload_clip(podcast, episode, clip_num):
         if "error" in result:
             message = result["error"]
             status = "quota" if "uploadLimitExceeded" in message else "failed"
-            record_youtube_upload(podcast, episode, clip_num, status, error=message)
+            record_youtube_upload(podcast, episode, clip_num, status, error=message,
+                                  sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
             flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
         else:
-            record_youtube_upload(podcast, episode, clip_num, "uploaded", video_id=result.get("video_id"))
+            record_youtube_upload(podcast, episode, clip_num, "uploaded", video_id=result.get("video_id"),
+                                  sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
             flash(f"Upload berhasil: {result.get('url', result.get('video_id', ''))}", "success")
     except Exception as exc:
         message = str(exc)
         status = "quota" if "uploadLimitExceeded" in message else "failed"
-        record_youtube_upload(podcast, episode, clip_num, status, error=message)
+        record_youtube_upload(podcast, episode, clip_num, status, error=message,
+                              sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
         flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
+    return redirect(url_for("admin_page"))
+
+
+@app.route("/admin/clips/<podcast>/<episode>/<clip_num>/manual-upload", methods=["POST"])
+@admin_required()
+def admin_manual_upload_clip(podcast, episode, clip_num):
+    if not check_csrf():
+        return "Invalid form token.", 400
+    clip_info = _deployed_clip(podcast, episode, clip_num)
+    if clip_info is None:
+        flash("Clip or caption not found.", "error")
+        return redirect(url_for("admin_page"))
+    clip_path, caption = clip_info
+    video_id_or_url = (request.form.get("video_id") or "").strip()
+    reviewer = "admin"
+    existing = get_youtube_upload(podcast, episode, clip_num)
+    if existing and existing.get("status") == "uploaded":
+        flash(f"Clip already uploaded via API: {existing.get('video_id','')}", "error")
+        return redirect(url_for("admin_page"))
+    meta = deployed_clip_metadata(podcast, episode, clip_num, caption=caption, clip_path=clip_path) or {}
+    try:
+        saved_id = record_manual_upload(
+            podcast, episode, clip_num, video_id_or_url, reviewed_by=reviewer,
+            sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0),
+        )
+    except ValueError as exc:
+        flash(str(exc), "error")
+        return redirect(url_for("admin_page"))
+    # Write the companion metadata JSON next to the clip so the file, description hash never
+    # diverge from the Studio copy.
+    try:
+        json_out = Path(clip_path).with_suffix(Path(clip_path).suffix + ".metadata.json")
+        payload = {
+            "podcast": podcast,
+            "episode": episode,
+            "clip_num": int(clip_num) if str(clip_num).isdigit() else str(clip_num),
+            "video_id": saved_id,
+            "youtube_url": f"https://www.youtube.com/watch?v={saved_id}",
+            "youtube_short_url": f"https://youtu.be/{saved_id}",
+            "youtube_studio_url": f"https://studio.youtube.com/video/{saved_id}/edit",
+            "upload_method": "manual_youtube_studio",
+            "reviewed_by": reviewer,
+            "title": meta.get("title", ""),
+            "title_plain": meta.get("title_plain", ""),
+            "description": meta.get("description", ""),
+            "tags": meta.get("tags", []),
+            "tags_csv": meta.get("tags_csv", ""),
+            "category_id": 25,
+            "source_mp4": meta.get("video_filename", ""),
+            "source_mp4_size_bytes": meta.get("file_size", 0),
+            "source_mp4_size_mb": meta.get("file_size_mb", 0),
+            "source_mp4_sha256": meta.get("sha256", ""),
+            "created_at_utc": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat(),
+        }
+        json_out.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+    flash(f"Manual upload dicatat: https://youtu.be/{saved_id}", "success")
     return redirect(url_for("admin_page"))
 
 

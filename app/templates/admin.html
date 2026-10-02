@@ -86,6 +86,7 @@
         <section class="card">
             <h2>YouTube clips</h2>
             <p>Upload satu per satu setelah review. Judul dan caption diambil dari gallery.</p>
+            <details><summary style="cursor:pointer;color:#bbb;margin-bottom:10px"><small>Manual studio upload — when API quota is expired: (1) copy metadata, (2) drag-drop MP4 di YouTube Studio, (3) tempel video ID atau URL di form bawah lalu Simpan.</small></summary></details>
             {% if deployed_clips %}
                 <div class="table-wrap"><table>
                     <thead><tr><th>Episode</th><th>Clip</th><th>Status</th><th>Action</th></tr></thead>
@@ -94,16 +95,94 @@
                             <tr>
                                 <td>{{ clip.podcast }} / {{ clip.episode }}</td>
                                 <td>{{ clip.clip_num }}. {{ clip.title }}</td>
-                                <td>{{ clip.upload.status if clip.upload else 'Belum di-upload' }}{% if clip.upload and clip.upload.video_id %}<br><small>{{ clip.upload.video_id }}</small>{% endif %}</td>
                                 <td>
-                                    {% if not clip.upload or clip.upload.status != 'uploaded' %}
-                                        <form method="post" action="{{ url_for('admin_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}">
+                                    {% if clip.upload %}
+                                        {% if clip.upload.status == 'manual' %}Manual (YouTube Studio){% else %}{{ clip.upload.status }}{% endif %}
+                                        {% if clip.upload.video_id %}
+                                            <br><small><a href="https://youtu.be/{{ clip.upload.video_id }}" target="_blank" rel="noopener noreferrer">{{ clip.upload.video_id }}</a></small>
+                                        {% endif %}
+                                        {% if clip.upload.error and clip.upload.status != 'manual' %}<br><small style="color:#ff9999">{{ clip.upload.error[:160] }}</small>{% endif %}
+                                    {% else %}Belum di-upload{% endif %}
+                                </td>
+                                <td>
+                                    {% if not clip.upload or (clip.upload.status not in ('uploaded', 'manual')) %}
+                                        <form method="post" action="{{ url_for('admin_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}" style="display:inline">
                                             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                            <button type="submit">Upload ke YouTube</button>
+                                            <button type="submit">Upload API</button>
                                         </form>
+                                        <button type="button" class="secondary"
+                                                data-toggle-details="#manual-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
+                                                style="margin-top:6px">Manual Studio…</button>
+                                    {% else %}
+                                        <small>Selesai — {{ 'manual' if clip.upload.status == 'manual' else 'API' }}</small>
                                     {% endif %}
                                 </td>
                             </tr>
+                            {% if clip.manual %}
+                                <tr id="manual-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}" hidden style="background:#141414">
+                                    <td colspan="4" style="padding:14px 18px">
+                                        <div style="display:grid;grid-template-columns: 1.2fr 1fr; gap:18px;align-items:start">
+                                            <div>
+                                                <p style="margin:0 0 10px">
+                                                    <strong>File video:</strong> {{ clip.manual.video_filename }}
+                                                    ({{ clip.manual.file_size_mb }} MB)
+                                                    <br>
+                                                    <small>{{ clip.manual.video_path }}</small>
+                                                </p>
+                                                {% if clip.manual.sha256 %}
+                                                <p style="margin:6px 0 12px">
+                                                    <strong>SHA-256:</strong>
+                                                    <code id="sha-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
+                                                          style="background:#060606;padding:4px 6px;border-radius:6px;display:inline-block;max-width:100%;overflow-wrap:anywhere;font-size:.8rem">{{ clip.manual.sha256 }}</code>
+                                                    <button class="secondary" type="button" style="font-size:.8rem;padding:5px 10px;margin-left:6px"
+                                                            data-copy="#sha-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy</button>
+                                                </p>
+                                                {% endif %}
+                                                <p style="margin:4px 0"><strong>Judul (100 chars):</strong></p>
+                                                <textarea rows="2" readonly id="title-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
+                                                          style="resize:vertical;min-height:3.5em;width:100%;background:#0c0c0c;color:#eee;border:1px solid #444;border-radius:6px;padding:8px">{{ clip.manual.title }}</textarea>
+                                                <p style="margin:12px 0 4px"><strong>Deskripsi (5000 chars):</strong></p>
+                                                <textarea rows="6" readonly id="desc-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
+                                                          style="resize:vertical;width:100%;background:#0c0c0c;color:#eee;border:1px solid #444;border-radius:6px;padding:8px">{{ clip.manual.description }}</textarea>
+                                                <p style="margin:12px 0 4px"><strong>Tags (comma separated, 500 chars):</strong></p>
+                                                <textarea rows="2" readonly id="tags-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
+                                                          style="resize:none;width:100%;background:#0c0c0c;color:#eee;border:1px solid #444;border-radius:6px;padding:8px">{{ clip.manual.tags_csv }}</textarea>
+                                                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+                                                    <button class="secondary" type="button" data-copy="#title-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy judul</button>
+                                                    <button class="secondary" type="button" data-copy="#desc-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy deskripsi</button>
+                                                    <button class="secondary" type="button" data-copy="#tags-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy tags</button>
+                                                    <a class="button secondary" target="_blank" rel="noopener noreferrer"
+                                                       href="{{ clip.manual.studio_upload_url }}">Buka YouTube Studio ↗</a>
+                                                </div>
+                                                <p style="margin:14px 0 6px;color:#aaa"><small>Setelah Anda unggah MP4 di Studio dan video sudah punya ID, tempel 11-karakter ID <em>atau</em> URL penuh YouTube di bawah lalu klik Simpan. Catatan status akan diperbarui otomatis.</small></p>
+                                                <form method="post" action="{{ url_for('admin_manual_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}"
+                                                      style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                                                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                                    <div style="flex:1;min-width:280px">
+                                                        <label for="vid-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">YouTube video ID <em>atau</em> URL lengkap</label>
+                                                        <input id="vid-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
+                                                               name="video_id" type="text" required
+                                                               autocomplete="off" maxlength="200"
+                                                               placeholder="cth: dQw4w9WgXcQ atau https://youtu.be/dQw4w9WgXcQ atau https://www.youtube.com/watch?v=dQw4w9WgXcQ">
+                                                    </div>
+                                                    <button type="submit">Simpan manual upload</button>
+                                                </form>
+                                            </div>
+                                            <div>
+                                                <p style="margin:0 0 10px"><strong>Langkah-langkah Studio:</strong></p>
+                                                <ol style="padding-left:18px;margin:0;color:#ddd">
+                                                    <li>Klik <strong>Buka YouTube Studio</strong>, lalu <em>Create &rarr; Upload videos</em>.</li>
+                                                    <li>Drag-drop file MP4 dari path di atas (folder <code>/app/static/clips/{{ clip.podcast }}/{{ clip.episode }}/</code>).</li>
+                                                    <li>Copy judul, deskripsi, tags, tempel masing-masing di tab Details Studio.</li>
+                                                    <li>Visibility: <strong>Public</strong>, Save → salin video ID.</li>
+                                                    <li>Balik ke halaman admin ini, tempel ID atau URL di form kiri → <strong>Simpan manual upload</strong>.</li>
+                                                    <li>Sistem akan menulis <code>{{ clip.manual.video_filename }}.metadata.json</code> di samping file MP4 sebagai bukti record.</li>
+                                                </ol>
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            {% endif %}
                         {% endfor %}
                     </tbody>
                 </table></div>
@@ -182,6 +261,46 @@
         </section>
     </main>
     <script>
+        // --- Manual studio upload helpers ---
+        document.addEventListener("click", (ev) => {
+            const copyBtn = ev.target.closest("[data-copy]");
+            if (copyBtn) {
+                const sel = copyBtn.getAttribute("data-copy");
+                const target = document.querySelector(sel);
+                if (!target) return;
+                const text = target.tagName === "INPUT" || target.tagName === "TEXTAREA" ? target.value : target.textContent || target.innerText || "";
+                const done = () => {
+                    const old = copyBtn.textContent;
+                    copyBtn.textContent = "✓ Copied";
+                    setTimeout(() => { copyBtn.textContent = old; }, 1500);
+                };
+                try {
+                    if (navigator.clipboard && navigator.clipboard.writeText) {
+                        navigator.clipboard.writeText(String(text || "")).then(done).catch(() => {
+                            window.prompt("Salin teks di bawah (Ctrl+C):", String(text || ""));
+                            done();
+                        });
+                    } else {
+                        window.prompt("Salin teks di bawah (Ctrl+C):", String(text || ""));
+                        done();
+                    }
+                } catch (e) {
+                    window.prompt("Salin teks di bawah (Ctrl+C):", String(text || ""));
+                    done();
+                }
+                return;
+            }
+            const toggleBtn = ev.target.closest("[data-toggle-details]");
+            if (toggleBtn) {
+                const sel = toggleBtn.getAttribute("data-toggle-details");
+                const target = document.querySelector(sel);
+                if (!target) return;
+                const wasHidden = target.hasAttribute("hidden");
+                if (wasHidden) target.removeAttribute("hidden"); else target.setAttribute("hidden", "");
+                return;
+            }
+        });
+
         const jobRows = document.querySelectorAll("tr[data-video-id]");
         const hasRunningJobs = [...jobRows].some(row => row.querySelector(".job-label")?.textContent === "Berjalan");
 
