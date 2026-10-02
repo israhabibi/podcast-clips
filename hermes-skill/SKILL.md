@@ -25,7 +25,7 @@ Automated pipeline on this machine, all in `~/podcast-clips/` (venv at `.venv` w
      PODCAST_TRANSCRIPT_FILE=/tmp/podcast-clips/<episode-id>/transcript.json /home/isra/podcast-clips/.venv/bin/python scripts/youtube_transcript_to_segments.py < /tmp/podcast-clips/<episode-id>/transcript_raw.txt
      ```
      Verify segment count and first-line text match the episode before proceeding with curate.
-3. **Curate**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> .venv/bin/python curate.py small <podcast_slug> "<episode_title>"` — one LLM call returns episode summary + X post + 6-12 clip moments → `episode_data.json` + `clips.json`.
+3. **Curate**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> .venv/bin/python curate.py small <podcast_slug> "<episode_title>"` — the LLM returns episode summary + X post + 6-12 clip moments → `episode_data.json` + `clips.json`. The canonical script retries invalid JSON/metadata up to three times, accepts 35–75 second aligned ranges, and can use optional `laughter.json` burst hints.
    - The `curate.py` script reads `HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY` from `~/.hermes/.env` automatically. Do NOT pass the key explicitly in the command — the environment's own key (read via `printenv HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY`) is the correct one; passing a wrong explicit value causes `HTTP 401 Unauthorized`.
    - `podcast_slug`: jelasin-dong | bocor-alus | tukang-kupas
    - `episode_title`: original episode title (auto-slugified for URL)

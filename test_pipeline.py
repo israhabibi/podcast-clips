@@ -13,10 +13,12 @@ Cakupan:
   7. Edge cases (file tidak ada, path traversal, invalid input)
 """
 
-import sys, os, json, tempfile, unittest, logging
+import sys, os, json, tempfile, unittest, logging, importlib.util
 import subprocess
+from contextlib import redirect_stdout
 from pathlib import Path
 from io import StringIO
+from unittest.mock import patch
 
 # ── Setup ──────────────────────────────────────────────────────────────────
 REPO_DIR = Path(__file__).resolve().parent
@@ -85,6 +87,67 @@ class TestImports(unittest.TestCase):
                 # Syntax check via compile
                 with open(path) as f:
                     compile(f.read(), str(path), 'exec')
+
+
+class TestClipQuality(unittest.TestCase):
+    def setUp(self):
+        from clip_quality import format_timed_transcript, validate_clips
+        self.format_timed_transcript = format_timed_transcript
+        self.validate_clips = validate_clips
+        self.segments = [
+            {"start": 0.0, "end": 10.0, "text": "Pembukaan singkat."},
+            {"start": 10.0, "end": 25.0, "text": "Kita bahas hasil riset terbaru."},
+            {"start": 25.0, "end": 50.0, "text": "Temuan ini mengubah cara pandang kita."},
+            {"start": 50.0, "end": 65.0, "text": "Itulah bagian yang paling mengejutkan."},
+            {"start": 65.0, "end": 80.0, "text": "Sekian penjelasan untuk hari ini."},
+        ]
+
+    def test_prompt_transcript_keeps_each_exact_segment_boundary(self):
+        rendered = self.format_timed_transcript(self.segments)
+        self.assertIn("[10.00-25.00] Kita bahas hasil riset terbaru.", rendered)
+        self.assertIn("[50.00-65.00] Itulah bagian yang paling mengejutkan.", rendered)
+
+    def test_clip_times_snap_and_nonverbatim_hook_uses_transcript_quote(self):
+        clips = [{
+            "start": 10.8,
+            "end": 50.7,
+            "title": "Temuan mengejutkan",
+            "hook": "Klaim sensasional yang tidak ada di transkrip",
+        }]
+        validated = self.validate_clips(clips, self.segments)
+        self.assertEqual((validated[0]["start"], validated[0]["end"]), (10.0, 50.0))
+        self.assertEqual(validated[0]["hook"], self.segments[1]["text"])
+
+    def test_verbatim_hook_is_preserved(self):
+        clips = [{
+            "start": 10.0,
+            "end": 50.0,
+            "title": "Temuan mengejutkan",
+            "hook": "Temuan ini mengubah cara pandang kita",
+        }]
+        validated = self.validate_clips(clips, self.segments)
+        self.assertEqual(validated[0]["hook"], clips[0]["hook"])
+
+    def test_overlong_title_is_shortened_without_invalidating_clip(self):
+        clips = [{
+            "start": 10.0,
+            "end": 50.0,
+            "title": "Judul klip yang terlalu panjang untuk ditampilkan pada video pendek",
+            "hook": "Temuan ini mengubah cara pandang kita",
+        }]
+        validated = self.validate_clips(clips, self.segments)
+        self.assertLessEqual(len(validated[0]["title"]), 50)
+        self.assertTrue(validated[0]["title"].endswith("..."))
+
+    def test_clip_with_unmatched_timestamp_is_rejected(self):
+        clips = [{
+            "start": 4.0,
+            "end": 50.0,
+            "title": "Topik",
+            "hook": "Kita bahas hasil riset terbaru",
+        }]
+        with self.assertRaisesRegex(ValueError, "segment boundaries"):
+            self.validate_clips(clips, self.segments)
 
 
 class TestFlaskApp(unittest.TestCase):
@@ -283,6 +346,36 @@ class TestCutSmartScript(unittest.TestCase):
         self.assertEqual(subs[0][2], "satu dua tiga")
 
 
+class TestNewsOverlay(unittest.TestCase):
+    def test_source_card_is_timed_at_clip_end_and_uses_readable_sources(self):
+        from news_overlay import build_news_overlay_event
+
+        sources = [
+            {"title": "Panja dibentuk untuk mengawasi kasus korupsi", "url": "https://www.antaranews.com/news/1"},
+            {"title": "KPK dan Kejaksaan Agung berseteru", "url": "https://www.kompas.id/article/2"},
+            {"title": "Sumber ketiga", "url": "https://rmol.id/news/3"},
+            {"title": "Sumber keempat tidak ditampilkan", "url": "https://tempo.co/news/4"},
+        ]
+        event = build_news_overlay_event(sources, 62)
+
+        self.assertIn("0:00:56.00,0:01:02.00", event)
+        self.assertIn(r"\pos(64,120)", event)
+        self.assertIn("ANTARANEWS", event)
+        self.assertIn("KOMPAS", event)
+        self.assertIn("RMOL", event)
+        self.assertNotIn("tempo.co", event)
+        self.assertIn("Link lengkap di caption", event)
+        self.assertNotIn("https://", event)
+
+    def test_missing_or_invalid_sources_do_not_create_card(self):
+        from news_overlay import build_news_overlay_event
+
+        self.assertIsNone(build_news_overlay_event([], 62))
+        self.assertIsNone(build_news_overlay_event([{"title": "Bad URL", "url": "javascript:alert(1)"}], 62))
+        with self.assertRaises(ValueError):
+            build_news_overlay_event([], float("nan"))
+
+
 class TestUploadScripts(unittest.TestCase):
     """Test 7: Upload scripts — path handling, edge cases."""
     
@@ -315,6 +408,51 @@ class TestUploadScripts(unittest.TestCase):
             caps = json.load(f)
         for key in caps:
             self.assertIsInstance(key, str)
+
+    def load_tiktok_uploader(self, script_path):
+        module_name = "tiktok_upload_" + script_path.replace("/", "_").replace(".", "_")
+        spec = importlib.util.spec_from_file_location(module_name, REPO_DIR / script_path)
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {"PODCAST_WORK_DIR": str(self.tmp)}):
+            spec.loader.exec_module(module)
+        return module
+
+    def test_tiktok_uploaders_accept_root_captions(self):
+        for script_path in ("scripts/tiktok_upload.py", "hermes-skill/scripts/tiktok_upload.py"):
+            with self.subTest(script=script_path):
+                module = self.load_tiktok_uploader(script_path)
+                with patch.object(module, "upload_clip", return_value={"status": "inbox"}) as upload:
+                    with redirect_stdout(StringIO()):
+                        status = module.main(["all"])
+                self.assertEqual(status, 0)
+                self.assertEqual(upload.call_count, 2)
+
+    def test_tiktok_uploaders_fail_on_missing_inputs_before_upload(self):
+        for script_path in ("scripts/tiktok_upload.py", "hermes-skill/scripts/tiktok_upload.py"):
+            with self.subTest(script=script_path):
+                module = self.load_tiktok_uploader(script_path)
+                (self.tmp / "captions.json").unlink()
+                with patch.object(module, "upload_clip") as upload:
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        status = module.main(["all"])
+                self.assertEqual(status, 1)
+                self.assertIn("Captions file not found", output.getvalue())
+                upload.assert_not_called()
+                with open(self.tmp / "captions.json", "w") as captions_file:
+                    json.dump({"1": {"clip": "missing.mp4", "title": "Klip", "caption": "Caption"}}, captions_file)
+                with patch.object(module, "upload_clip") as upload:
+                    output = StringIO()
+                    with redirect_stdout(output):
+                        status = module.main(["all"])
+                self.assertEqual(status, 1)
+                self.assertIn("Clip file for 1 not found", output.getvalue())
+                upload.assert_not_called()
+                with open(self.tmp / "captions.json", "w") as captions_file:
+                    json.dump({
+                        "1": {"clip": "clip01.mp4", "title": "Klip 1", "caption": "Caption 1"},
+                        "2": {"clip": "clip02.mp4", "title": "Klip 2", "caption": "Caption 2"},
+                    }, captions_file)
 
 
 class TestMonitorScript(unittest.TestCase):

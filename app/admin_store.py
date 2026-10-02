@@ -1,5 +1,6 @@
 """Local queue for YouTube links submitted through the admin page."""
 
+import hashlib
 import os
 import re
 import sqlite3
@@ -12,6 +13,12 @@ from urllib.parse import parse_qs, urlsplit
 PODCASTS = ("jelasin-dong", "bocor-alus", "tukang-kupas")
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 REPO_DIR = Path(__file__).resolve().parents[1]
+YOUTUBE_CLIPS_ROOT = REPO_DIR / "app" / "static" / "clips"
+DEFAULT_TAGS_BASE = (
+    "shorts", "podcast", "tempo", "indonesia", "berita", "politik",
+    "viral", "fyp", "news", "video", "opini", "analisis",
+    "terkini", "podcastindonesia",
+)
 
 
 def database_path():
@@ -45,6 +52,20 @@ def parse_youtube_url(value):
         return None
 
 
+def _ensure_columns(connection):
+    """Backfill new/upgrade-safe upgrade: add reviewed_at, reviewed_by, sha256, file_size columns if missing."""
+    existing = {row["name"] for row in connection.execute("PRAGMA table_info(youtube_uploads)").fetchall()}
+    additions = [
+        ("reviewed_at", "TEXT NOT NULL DEFAULT ''"),
+        ("reviewed_by", "TEXT NOT NULL DEFAULT ''"),
+        ("sha256", "TEXT NOT NULL DEFAULT ''"),
+        ("file_size", "INTEGER NOT NULL DEFAULT 0"),
+    ]
+    for col_name, col_def in additions:
+        if col_name not in existing:
+            connection.execute(f"ALTER TABLE youtube_uploads ADD COLUMN {col_name} {col_def}")
+
+
 def _connect():
     path = database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,6 +91,20 @@ def _connect():
             blocked_until INTEGER NOT NULL
         )"""
     )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS youtube_uploads (
+            id INTEGER PRIMARY KEY,
+            podcast TEXT NOT NULL,
+            episode TEXT NOT NULL,
+            clip_num TEXT NOT NULL,
+            video_id TEXT,
+            status TEXT NOT NULL,
+            error TEXT NOT NULL DEFAULT '',
+            created_at TEXT NOT NULL,
+            UNIQUE(podcast, episode, clip_num)
+        )"""
+    )
+    _ensure_columns(connection)
     return connection
 
 
@@ -124,6 +159,136 @@ def list_submissions(status=None, limit=None):
 
 def recent_submissions(limit=50):
     return list_submissions(limit=limit)
+
+
+UPLOAD_STATUSES = frozenset(("uploading", "uploaded", "quota", "failed", "manual"))
+
+
+def record_youtube_upload(podcast, episode, clip_num, status, video_id=None, error="", reviewed_by="", sha256="", file_size=0):
+    if podcast not in PODCASTS or not episode or not str(clip_num).isdigit():
+        raise ValueError("Invalid upload identity.")
+    if status not in UPLOAD_STATUSES:
+        raise ValueError("Invalid upload status.")
+    now = datetime.now(timezone.utc).isoformat()
+    reviewed_at = now if status == "manual" and reviewed_by else ""
+    connection = _connect()
+    try:
+        with connection:
+            connection.execute(
+                """INSERT INTO youtube_uploads
+                   (podcast, episode, clip_num, video_id, status, error, created_at, reviewed_at, reviewed_by, sha256, file_size)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(podcast, episode, clip_num) DO UPDATE SET
+                   video_id=COALESCE(excluded.video_id, youtube_uploads.video_id),
+                   status=excluded.status,
+                   error=CASE WHEN excluded.error='' THEN youtube_uploads.error ELSE excluded.error END,
+                   created_at=excluded.created_at,
+                   reviewed_at=excluded.reviewed_at,
+                   reviewed_by=excluded.reviewed_by,
+                   sha256=CASE WHEN excluded.sha256='' THEN youtube_uploads.sha256 ELSE excluded.sha256 END,
+                   file_size=CASE WHEN excluded.file_size=0 THEN youtube_uploads.file_size ELSE excluded.file_size END""",
+                (podcast, episode, str(clip_num), video_id, status, error[:500], now,
+                 reviewed_at, (reviewed_by or "")[:80], (sha256 or "")[:64], int(file_size or 0)),
+            )
+    finally:
+        connection.close()
+
+
+def record_manual_upload(podcast, episode, clip_num, video_id_or_url, reviewed_by="admin", sha256="", file_size=0):
+    """Record a manual YouTube studio upload: accepts 11-char id or full URL, returns (saved_video_id, parsed_from_url)."""
+    if not isinstance(video_id_or_url, str):
+        raise ValueError("YouTube video ID or URL is required.")
+    v_id = parse_youtube_url(video_id_or_url) or (
+        video_id_or_url if VIDEO_ID.fullmatch(video_id_or_url.strip()) else None
+    )
+    if not v_id:
+        raise ValueError("Enter a valid YouTube video ID (11 chars) or YouTube URL.")
+    record_youtube_upload(
+        podcast, episode, clip_num, status="manual", video_id=v_id, reviewed_by=reviewed_by,
+        sha256=sha256, file_size=file_size,
+    )
+    return v_id
+
+
+def file_sha256(path, chunk=1024 * 1024):
+    path = Path(path)
+    if not path.is_file():
+        return ""
+    h = hashlib.sha256()
+    with path.open("rb") as f:
+        while True:
+            buf = f.read(chunk)
+            if not buf:
+                break
+            h.update(buf)
+    return h.hexdigest()
+
+
+def deployed_clip_metadata(podcast, episode, clip_num, caption=None, clip_path=None):
+    """Return {title, description, tags, video_path, file_size, sha256_hexdigest, studio_url} for manual YouTube Studio copy-paste.
+       Returns None if clip not deployed."""
+    if podcast not in PODCASTS or Path(episode).name != episode or not str(clip_num).isdigit():
+        return None
+    episode_dir = YOUTUBE_CLIPS_ROOT / podcast / episode
+    captions_path = episode_dir / "captions.json"
+    try:
+        if caption is None:
+            if not captions_path.is_file():
+                return None
+            all_caps = __import__("json").loads(captions_path.read_text(encoding="utf-8"))
+            caption = all_caps[str(clip_num)]
+    except (OSError, KeyError, ValueError):
+        return None
+    try:
+        if clip_path is None:
+            clip_name = caption.get("clip")
+            if not isinstance(clip_name, str) or Path(clip_name).name != clip_name:
+                return None
+            clip_path = episode_dir / clip_name
+    except (TypeError, ValueError):
+        return None
+    clip_path = Path(clip_path)
+    if clip_path.parent != episode_dir or not clip_path.is_file():
+        return None
+    title = str(caption.get("title", f"Clip {clip_num}")).strip()
+    description = str(caption.get("caption", "")).strip()
+    tag_list = [*DEFAULT_TAGS_BASE, podcast]
+    dedup_tags = []
+    for t in tag_list:
+        t = str(t).strip().lower()
+        if t and t not in dedup_tags:
+            dedup_tags.append(t)
+    stat = clip_path.stat()
+    return {
+        "title": (title + " #Shorts")[:100],
+        "title_plain": title[:100],
+        "description": description[:4900],
+        "tags": dedup_tags,
+        "tags_csv": ", ".join(dedup_tags),
+        "video_path": str(clip_path),
+        "video_filename": clip_path.name,
+        "file_size": stat.st_size,
+        "file_size_mb": round(stat.st_size / (1024 * 1024), 2),
+        "sha256": file_sha256(clip_path),
+        "studio_upload_url": "https://studio.youtube.com/channel/UC/videos/upload",
+        "podcast": podcast,
+        "episode": episode,
+        "clip_num": str(clip_num),
+    }
+
+
+def get_youtube_upload(podcast, episode, clip_num):
+    connection = _connect()
+    try:
+        row = connection.execute(
+            "SELECT podcast, episode, clip_num, video_id, status, error, created_at, "
+            "reviewed_at, reviewed_by, sha256, file_size "
+            "FROM youtube_uploads WHERE podcast = ? AND episode = ? AND clip_num = ?",
+            (podcast, episode, str(clip_num)),
+        ).fetchone()
+    finally:
+        connection.close()
+    return dict(row) if row else None
 
 
 def set_submission_status(video_id, status):

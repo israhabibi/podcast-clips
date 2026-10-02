@@ -2,6 +2,7 @@
 """Kurasi momen terbaik + rangkuman episode + x post dari transkrip podcast via LLM (SumoPod)."""
 import json, sys, os, urllib.request, re
 from pathlib import Path
+from clip_quality import format_timed_transcript, validate_clips
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
 if not KEY:
@@ -34,25 +35,27 @@ EPISODE_SLUG = re.sub(r'[^a-z0-9]+', '-', EPISODE_TITLE_RAW.lower()).strip('-')
 with open(WORK_DIR / "transcript.json") as f:
     segs = json.load(f)
 
-# buat transkrip bertimestamp (per ~30s chunk biar ringkas)
-lines = []
-cur_start = None
-buf = []
-def flush():
-    global cur_start, buf
-    if buf:
-        lines.append(f"[{cur_start:.0f}s] " + " ".join(buf))
-    buf = []
-for s in segs:
-    if cur_start is None:
-        cur_start = s["start"]
-    buf.append(s["text"])
-    if s["end"] - cur_start >= 30:
-        flush(); cur_start = None
-flush()
-transcript_text = "\n".join(lines)
+transcript_text = format_timed_transcript(segs)
 
-prompt = f"""Kamu editor clip podcast. Dibawah ini transkrip podcast berbahasa Indonesia dengan timestamp.
+# Laughter signal (audio burst detection) — hint the LLM where the room exploded
+laughter_hint = ""
+laughter_file = WORK_DIR / "laughter.json"
+if laughter_file.exists():
+    try:
+        ldata = json.loads(laughter_file.read_text())
+        bursts = ldata.get("bursts", [])
+        if bursts:
+            # merge adjacent bursts and map to readable ranges
+            ranges = ", ".join(f"{a}-{b}d" for a, b, _ in bursts[:40])
+            laughter_hint = f"""
+SINYAL AUDIO (deteksi ketawa/tawa kerumunan dari analisis loudness — rentang detik dengan energy burst tinggi):
+{ranges}
+Momen dengan burst ketawa biasanya adalah punchline terbaik. Prioritaskan rentang yang memiliki burst di dalamnya atau tepat setelahnya (ketawa = payoff). Klip TANPA burst hanya pilih kalimat benar-benar kuat secara naratif.
+"""
+    except Exception:
+        laughter_hint = ""
+
+prompt = f"""Kamu editor clip podcast. Dibawah ini transkrip podcast berbahasa Indonesia dengan timestamp.{laughter_hint}
 
 Tugas kamuhasilkan SATUSATU respons JSON dengan tiga field:
 1. "episode_summary": ringkasan episode 3-5 kalimat (untuk web gallery, buat orang paham episode ini tentang apa)
@@ -64,8 +67,13 @@ Tugas kamuhasilkan SATUSATU respons JSON dengan tiga field:
 Kriteria klip:
 - Ada punchline, hot take, cerita lucu, momen kaget, atau insight menarik
 - Pembukaan klip harus langsung hook (kalimat pertama menarik, bukan kalimat lanjutan)
-- Klip harus berdiri sendiri (gak perlu konteks sebelumnya)
-- HINDARI topik politik/sara, pilih yang hiburan/cerita/insight netral
+- Setiap klip punya alur mini: hook/pertanyaan, konteks secukupnya, lalu payoff atau insight
+- Mulai dan akhiri pada batas kalimat yang utuh; jangan memotong kata atau membuang konteks yang diperlukan
+- Pilih momen yang berbeda dan tidak mengulang bagian transkrip yang sama
+- Topik politik diperbolehkan untuk podcast politik; jangan menambahkan klaim atau konteks yang tidak didukung transkrip
+- Pilih start tepat pada awal segmen transkrip dan end tepat pada akhir segmen transkrip; jangan menebak timestamp di tengah segmen
+- Field hook harus berupa kutipan verbatim dari teks pada rentang klip, bukan parafrasa
+- Pilih rentang 40-70 detik setelah diselaraskan ke batas segmen
 
 Balas HANYA JSON valid, tanpa markdown, tanpa penjelasan:
 {{{{"episode_summary": "...", "x_post": {{"text": "...", "hashtags": ["#tag1", ...]}}, "clips": [{{"start": <detik>, "end": <detik>, "title": "<judul max 50 char>", "hook": "<kalimat hook dari klip>"}}]}}}}
@@ -73,43 +81,60 @@ Balas HANYA JSON valid, tanpa markdown, tanpa penjelasan:
 Transkrip:
 {transcript_text}"""
 
-req = urllib.request.Request(
-    "https://ai.sumopod.com/v1/chat/completions",
-    data=json.dumps({
-        "model": MODEL,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-    }).encode(),
-    headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
-)
-try:
-    resp = json.load(urllib.request.urlopen(req, timeout=600))
-except urllib.error.URLError as e:
-    sys.exit(f"LLM request failed: {e}")
-except json.JSONDecodeError as e:
-    sys.exit(f"LLM response not valid JSON: {e}")
+def call_llm():
+    req = urllib.request.Request(
+        "https://ai.sumopod.com/v1/chat/completions",
+        data=json.dumps({
+            "model": MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.3,
+        }).encode(),
+        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+    )
+    try:
+        resp = json.load(urllib.request.urlopen(req, timeout=600))
+    except urllib.error.URLError as e:
+        sys.exit(f"LLM request failed: {e}")
+    except json.JSONDecodeError as e:
+        sys.exit(f"LLM response not valid JSON: {e}")
+    return resp["choices"][0]["message"]["content"].strip()
 
-content = resp["choices"][0]["message"]["content"].strip()
-# Extract JSON object (may be wrapped in ``` or just raw)
-try:
-    # Try to find outermost braces
-    start = content.index('{')
-    end = content.rindex('}') + 1
-    content = content[start:end]
-    data = json.loads(content)
-except (ValueError, json.JSONDecodeError):
-    sys.exit(f"Failed to parse JSON from LLM response: {content[:200]}")
+
+# Retry up to 3x: transient LLM failures (bad JSON, invalid clip metadata, wrong clip count)
+# are common; the worker aborts the whole episode otherwise.
+MAX_CURATE_ATTEMPTS = 3
+content = None
+for attempt in range(1, MAX_CURATE_ATTEMPTS + 1):
+    content = call_llm()
+    # Extract JSON object (may be wrapped in ``` or just raw)
+    try:
+        start = content.index('{')
+        end = content.rindex('}') + 1
+        candidate = json.loads(content[start:end])
+        _summary = candidate.get("episode_summary", "")
+        _xpost = candidate.get("x_post", {})
+        _clips = candidate.get("clips", [])
+        if not _summary or not _xpost.get("text"):
+            raise ValueError("missing episode_summary or x_post.text")
+        if not 6 <= len(_clips) <= 12:
+            raise ValueError(f"got {len(_clips)} clips; expected 6-12")
+        validate_clips(_clips, segs, min_duration=35, max_duration=75)  # lenient: LLM often lands just outside 40-70
+        break  # fully valid
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(f"[curate] attempt {attempt}/{MAX_CURATE_ATTEMPTS} invalid: {exc}", file=sys.stderr)
+        if attempt == MAX_CURATE_ATTEMPTS:
+            sys.exit(f"curate failed after {MAX_CURATE_ATTEMPTS} attempts: {exc}")
+        content = None
+
+# Re-extract from the last valid content (validate passed)
+start = content.index('{')
+end = content.rindex('}') + 1
+content = content[start:end]
+data = json.loads(content)
 
 episode_summary = data.get("episode_summary", "")
 x_post = data.get("x_post", {})
 clips = data.get("clips", [])
-
-if not episode_summary:
-    sys.exit("LLM returned no episode_summary")
-if not x_post or not x_post.get("text"):
-    sys.exit("LLM returned no x_post.text")
-if not 6 <= len(clips) <= 12:
-    sys.exit(f"LLM returned {len(clips)} clips; expected between 6 and 12")
 
 # Build episode_data.json
 episode_data = {

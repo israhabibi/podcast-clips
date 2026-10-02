@@ -12,6 +12,7 @@ credentials/
 *_token.json
 app/youtube_token.json
 app/data/
+app/admin.sqlite3
 
 # Source media and rendered clips
 *.mp4

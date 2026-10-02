@@ -43,7 +43,7 @@ PODCAST_WORK_DIR="$EP" python scripts/youtube_upload.py all
    uv run python /home/isra/.hermes/skills/media/youtube-content/scripts/fetch_transcript.py <URL> --timestamps --text-only --language id,en | PODCAST_TRANSCRIPT_FILE=/tmp/podcast-clips/<episode-id>/transcript.json uv run python scripts/youtube_transcript_to_segments.py
      ```
      The script parses `MM:SS text` lines, merges same-timestamp utterances, and estimates end times from the next line's start. Verify segment count and first-line text match the episode before proceeding with curate.
-3. **Curate**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python curate.py <model> <podcast_slug> <episode_title>` — one LLM call returns episode summary + X post + 6–12 clip moments → `episode_data.json` + `clips.json`.
+3. **Curate**: `PODCAST_WORK_DIR=/tmp/podcast-clips/<episode-id> python curate.py <model> <podcast_slug> <episode_title>` — the LLM returns episode summary + X post + 6–12 clip moments → `episode_data.json` + `clips.json`. The canonical script retries invalid JSON/metadata up to three times, accepts 35–75 second aligned ranges, and can use optional `laughter.json` burst hints.
    - `podcast_slug`: jelasin-dong | bocor-alus | tukang-kupas
    - `episode_title`: original episode title from YouTube RSS (auto-slugified for URL)
    - `episode_data.json` contains: `episode_summary` (web), `x_post` {text, hashtags} (X hook + link), `clips` array.

@@ -95,7 +95,15 @@ def main():
     episode_title = (sys.argv[3].strip() if len(sys.argv) > 3 else '') or f'YouTube episode {video_id}'
     video_id = parse_video_id(url)
     timestamp = int(time.time())
-    episode_dir = ensure_dir(Path('/tmp/podcast-clips') / f"{video_id}-{timestamp}")
+    # Reuse an existing workdir for this video if it already has source.mp4 (resume-friendly;
+    # never re-download — YouTube 403 rate-limits repeated downloads of the same video).
+    episode_dir = None
+    for d in sorted(Path('/tmp/podcast-clips').glob(f"{video_id}-*")):
+        if d.is_dir() and (d / 'source.mp4').exists():
+            episode_dir = d
+            break
+    if episode_dir is None:
+        episode_dir = ensure_dir(Path('/tmp/podcast-clips') / f"{video_id}-{timestamp}")
     print(f"EPISODE_DIR={episode_dir}")
     print(f"VIDEO_URL={url}")
 
@@ -112,7 +120,18 @@ def main():
 
     source = episode_dir / 'source.mp4'
     if not source.exists():
-        step('download', [yt_dlp, '-f', 'bv*[height<=720]+ba/b[height<=720]', '--merge-output-format', 'mp4', '-o', str(episode_dir / 'source.%(ext)s'), url], env)
+        # 403 Forbidden is transient YouTube rate limiting — retry with backoff (3x)
+        for attempt in range(1, 4):
+            try:
+                step('download', [yt_dlp, '-f', 'bv*[height<=720]+ba/b[height<=720]', '--merge-output-format', 'mp4', '--retries', '3', '-o', str(episode_dir / 'source.%(ext)s'), url], env)
+            except RuntimeError as exc:
+                if attempt == 3:
+                    raise
+                wait = 60 * attempt
+                print(f"[download] attempt {attempt} failed ({exc}); retrying in {wait}s", file=sys.stderr)
+                time.sleep(wait)
+            if source.exists() or any(episode_dir.glob('source.*')):
+                break
     candidates = sorted(episode_dir.glob('source.*'))
     if not source.exists() and candidates:
         first = candidates[0]
@@ -131,6 +150,11 @@ def main():
     if not transcript_path.exists() or transcript_path.stat().st_size < 20:
         raise RuntimeError('Transcript generation produced no usable data')
 
+    # laughter/audio-burst signal for curate (optional — curate skips if laughter.json missing)
+    try:
+        step('laughter', [sys.executable, 'scripts/laughter_score.py', str(episode_dir)], env)
+    except RuntimeError as exc:
+        print(f"[laughter] skipped: {exc}", file=sys.stderr)
     step('curate', [sys.executable, 'curate.py', 'MiniMax-M2.7-highspeed', podcast_slug, episode_title], env)
     step('cut', [sys.executable, 'cut_smart.py', str(source)], env)
     # Minimal search_results placeholder to let caption.py run without failing.
