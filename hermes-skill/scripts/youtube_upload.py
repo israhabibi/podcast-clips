@@ -1,106 +1,76 @@
 #!/usr/bin/env python3
-"""Upload clip to YouTube Shorts."""
-import json, os, re, sys
+"""Hermes-skill shim: forwards execution to the single maintained copy in the podcast-clips repo.
+
+Runtime contract (safe for Hermes chat sessions):
+- CWD preserved unchanged (Hermes typically sets this to a /tmp/podcast-clips/<episode-id> workdir).
+- PYTHONPATH prepended with the repo root so imports like `from scripts.youtube_upload import upload_clip` resolve.
+- PODCAST_WORK_DIR defaulted to CWD if not already set OR set to empty string (but never overrides a real value).
+- Python interpreter chosen: `${REPO_ROOT}/.venv/bin/python > PODCAST_CLIPS_PYTHON env > current sys.executable`.
+- If repo cannot be found at the default location, print a clear error instead of silently failing.
+"""
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+import sys
 from pathlib import Path
-from google.oauth2.credentials import Credentials
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaFileUpload
 
-REPO_DIR = Path(__file__).resolve().parents[1]
-WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
-WORK_DIR = Path(WORK_DIR_VALUE) if WORK_DIR_VALUE else None
-TOKEN_FILE = Path(os.environ.get("YOUTUBE_TOKEN_FILE", REPO_DIR / "app" / "youtube_token.json"))
-CLIPS_DIR = WORK_DIR / "clips" if WORK_DIR else None
-CAPTIONS_FILE = os.path.join(WORK_DIR, "captions.json") if WORK_DIR else None
 
-def upload_clip(video_path, title, description, tags=None, category_id='25'):
-    if not os.path.exists(TOKEN_FILE):
-        return {"error": "Belum OAuth. Buka https://clips.gcp.my.id/auth dulu."}
-    
-    creds = Credentials.from_authorized_user_file(TOKEN_FILE, 
-        ['https://www.googleapis.com/auth/youtube'])
-    
-    youtube = build('youtube', 'v3', credentials=creds)
-    
-    # Strip leading newlines from caption (caption.py prefixes them)
-    clean_desc = description.strip()
-    clean_title = (title + ' #Shorts')[:100]
-    default_tags = tags or ['shorts', 'podcast', 'tempo', 'indonesia']
-    
-    body = {
-        'snippet': {
-            'title': clean_title,
-            'description': clean_desc,
-            'tags': default_tags,
-            'categoryId': category_id  # '25' = News & Politics
-        },
-        'status': {
-            'privacyStatus': 'public',
-            'selfDeclaredMadeForKids': False
-        }
-    }
-    
-    media = MediaFileUpload(video_path, chunksize=-1, resumable=True)
-    
-    request = youtube.videos().insert(
-        part='snippet,status',
-        body=body,
-        media_body=media
+def _repo_root() -> Path:
+    override = os.environ.get("PODCAST_CLIPS_REPO")
+    if override:
+        return Path(override).expanduser().resolve()
+    default = Path("~/podcast-clips").expanduser().resolve()
+    if default.is_dir():
+        return default
+    raise SystemExit(
+        "hermes-skill shim could not find the podcast-clips repository at: "
+        + str(default)
+        + "\nEither set PODCAST_CLIPS_REPO=/absolute/path/to/podcast-clips env var, or "
+        + "clone it to the default location ~/podcast-clips."
     )
-    
-    response = request.execute()
-    video_id = response['id']
-    
-    # MANDATORY: update with full metadata (insert() does not reliably embed all metadata)
-    youtube.videos().update(
-        part='snippet',
-        body={
-            'id': video_id,
-            'snippet': {
-                'title': clean_title,
-                'description': clean_desc,
-                'tags': default_tags,
-                'categoryId': category_id,
-            }
-        }
-    ).execute()
-    
-    return {
-        "video_id": video_id,
-        "url": f"https://youtube.com/watch?v={video_id}",
-        "title": clean_title
-    }
 
-if __name__ == '__main__':
-    if WORK_DIR is None:
-        print("ERROR: Set PODCAST_WORK_DIR, e.g. PODCAST_WORK_DIR=/tmp/podcast-clips/episode-id")
-        sys.exit(1)
-    if len(sys.argv) < 2:
-        print("Usage: python youtube_upload.py <clip_num>")
-        print("       python youtube_upload.py all")
-        sys.exit(1)
-    
-    if not os.path.exists(TOKEN_FILE):
-        print("ERROR: Belum OAuth. Buka https://clips.gcp.my.id/auth")
-        sys.exit(1)
-    
-    with open(CAPTIONS_FILE) as f:
-        caps = json.load(f)
-    
-    if sys.argv[1] == 'all':
-        for idx in sorted(caps.keys(), key=int):
-            clip_file = os.path.join(CLIPS_DIR, caps[idx]['clip'])
-            if os.path.exists(clip_file):
-                r = upload_clip(clip_file, caps[idx]['title'], caps[idx]['caption'])
-                print(f"  ✅ {r['url']}" if 'url' in r else f"  ❌ {r['error']}")
-    else:
-        idx = sys.argv[1]
-        if idx not in caps:
-            print(f"Clip {idx} not found")
-            sys.exit(1)
-        clip_file = os.path.join(CLIPS_DIR, caps[idx]['clip'])
-        r = upload_clip(clip_file, caps[idx]['title'], caps[idx]['caption'])
-        if 'url' in r:
-            print(f"✅ {r['url']}")
-        else:
-            print(f"❌ {r['error']}")
+
+def _python(repo_root: Path) -> str:
+    override = os.environ.get("PODCAST_CLIPS_PYTHON")
+    if override:
+        return override
+    venv_python = repo_root / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return sys.executable
+
+
+def main() -> int:
+    try:
+        repo_root = _repo_root()
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    target = (repo_root / "scripts/youtube_upload.py").resolve()
+    if not target.is_file():
+        print(
+            f"hermes-skill shim: target script missing: {target}\n"
+            f"(repo_root={repo_root})",
+            file=sys.stderr,
+        )
+        return 2
+
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "").strip()
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else str(repo_root)
+    )
+    env.setdefault("PODCAST_CLIPS_REPO", str(repo_root))
+    if "PODCAST_WORK_DIR" not in env or env["PODCAST_WORK_DIR"] in (None, ""):
+        # Hermes typically runs the skill from inside the episode workdir, so cwd == workdir.
+        env["PODCAST_WORK_DIR"] = str(Path.cwd())
+
+    cmd = [_python(repo_root), str(target), *sys.argv[1:]]
+    proc = subprocess.run(cmd, cwd=Path.cwd(), env=env, check=False)
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

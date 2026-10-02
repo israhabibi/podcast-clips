@@ -1,118 +1,76 @@
 #!/usr/bin/env python3
-"""Kurasi momen terbaik dari transkrip podcast via LLM (SumoPod)."""
-import json, sys, os, urllib.request, re
-from pathlib import Path
-from clip_quality import format_timed_transcript, validate_clips
+"""Hermes-skill shim: forwards execution to the single maintained copy in the podcast-clips repo.
 
-KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
-if not KEY:
-    for line in open(os.path.expanduser("~/.hermes/.env")):
-        if line.startswith("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY="):
-            KEY = line.strip().split("=", 1)[1].strip().strip('"')
-if not KEY:
-    sys.exit("API key not found")
-
-LLM_MODEL = "MiniMax-M2.7-highspeed"
-MODEL = LLM_MODEL
-WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
-if not WORK_DIR_VALUE:
-    sys.exit("PODCAST_WORK_DIR is required, e.g. /tmp/podcast-clips/episode-id")
-WORK_DIR = Path(WORK_DIR_VALUE)
-WORK_DIR.mkdir(parents=True, exist_ok=True)
-PODCAST_SLUG = sys.argv[2] if len(sys.argv) > 2 else "unknown"
-EPISODE_TITLE_RAW = sys.argv[3] if len(sys.argv) > 3 else "episode"
-EPISODE_SLUG = re.sub(r'[^a-z0-9]+', '-', EPISODE_TITLE_RAW.lower()).strip('-')
-
-with open(WORK_DIR / "transcript.json") as f:
-    segs = json.load(f)
-
-transcript_text = format_timed_transcript(segs)
-
-laughter_hint = ""
-laughter_file = WORK_DIR / "laughter.json"
-if laughter_file.exists():
-    try:
-        bursts = json.loads(laughter_file.read_text()).get("bursts", [])
-        if bursts:
-            ranges = ", ".join(f"{a}-{b}d" for a, b, _ in bursts[:40])
-            laughter_hint = f"""
-SINYAL AUDIO (deteksi ketawa/tawa kerumunan dari analisis loudness — rentang detik dengan energy burst tinggi):
-{ranges}
-Momen dengan burst ketawa biasanya adalah punchline terbaik. Prioritaskan rentang yang memiliki burst di dalamnya atau tepat setelahnya (ketawa = payoff). Klip TANPA burst hanya pilih kalimat benar-benar kuat secara naratif.
+Runtime contract (safe for Hermes chat sessions):
+- CWD preserved unchanged (Hermes typically sets this to a /tmp/podcast-clips/<episode-id> workdir).
+- PYTHONPATH prepended with the repo root so imports like `from scripts.youtube_upload import upload_clip` resolve.
+- PODCAST_WORK_DIR defaulted to CWD if not already set OR set to empty string (but never overrides a real value).
+- Python interpreter chosen: `${REPO_ROOT}/.venv/bin/python > PODCAST_CLIPS_PYTHON env > current sys.executable`.
+- If repo cannot be found at the default location, print a clear error instead of silently failing.
 """
-    except Exception:
-        laughter_hint = ""
+from __future__ import annotations
 
-prompt = f"""Kamu editor clip podcast. Dibawah ini transkrip podcast berbahasa Indonesia dengan timestamp.{laughter_hint}
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-Pilih 6 momen TERBAIK untuk dijadikan klip TikTok (durasi 40-70 detik). Kriteria:
-- Ada punchline, hot take, cerita lucu, momen kaget, atau insight menarik
-- Pembukaan klip harus langsung hook (kalimat pertama menarik, bukan kalimat lanjutan)
-- Setiap klip punya alur mini: hook/pertanyaan, konteks secukupnya, lalu payoff atau insight
-- Mulai dan akhiri pada batas kalimat yang utuh; jangan memotong kata atau membuang konteks yang diperlukan
-- Pilih momen yang berbeda dan tidak mengulang bagian transkrip yang sama
-- Topik politik diperbolehkan untuk podcast politik; jangan menambahkan klaim atau konteks yang tidak didukung transkrip
-- Pilih start tepat pada awal segmen transkrip dan end tepat pada akhir segmen transkrip; jangan menebak timestamp di tengah segmen
-- Field hook harus berupa kutipan verbatim dari teks pada rentang klip, bukan parafrasa
-- Pilih rentang 40-70 detik setelah diselaraskan ke batas segmen
 
-Balas HANYA JSON valid, tanpa markdown:
-[{{"start": <detik awal>, "end": <detik akhir>, "title": "<judul klip max 50 char>", "hook": "<kalimat hook dari klip>"}}]
-
-Transkrip:
-{transcript_text}"""
-
-def call_llm():
-    req = urllib.request.Request(
-        "https://ai.sumopod.com/v1/chat/completions",
-        data=json.dumps({"model": MODEL, "messages": [{"role": "user", "content": prompt}], "temperature": 0.3}).encode(),
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"},
+def _repo_root() -> Path:
+    override = os.environ.get("PODCAST_CLIPS_REPO")
+    if override:
+        return Path(override).expanduser().resolve()
+    default = Path("~/podcast-clips").expanduser().resolve()
+    if default.is_dir():
+        return default
+    raise SystemExit(
+        "hermes-skill shim could not find the podcast-clips repository at: "
+        + str(default)
+        + "\nEither set PODCAST_CLIPS_REPO=/absolute/path/to/podcast-clips env var, or "
+        + "clone it to the default location ~/podcast-clips."
     )
+
+
+def _python(repo_root: Path) -> str:
+    override = os.environ.get("PODCAST_CLIPS_PYTHON")
+    if override:
+        return override
+    venv_python = repo_root / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return sys.executable
+
+
+def main() -> int:
     try:
-        resp = json.load(urllib.request.urlopen(req, timeout=600))
-    except urllib.error.URLError as e:
-        sys.exit(f"LLM request failed: {e}")
-    except json.JSONDecodeError as e:
-        sys.exit(f"LLM response not valid JSON: {e}")
-    return resp["choices"][0]["message"]["content"].strip()
+        repo_root = _repo_root()
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    target = (repo_root / "curate.py").resolve()
+    if not target.is_file():
+        print(
+            f"hermes-skill shim: target script missing: {target}\n"
+            f"(repo_root={repo_root})",
+            file=sys.stderr,
+        )
+        return 2
+
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "").strip()
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else str(repo_root)
+    )
+    env.setdefault("PODCAST_CLIPS_REPO", str(repo_root))
+    if "PODCAST_WORK_DIR" not in env or env["PODCAST_WORK_DIR"] in (None, ""):
+        # Hermes typically runs the skill from inside the episode workdir, so cwd == workdir.
+        env["PODCAST_WORK_DIR"] = str(Path.cwd())
+
+    cmd = [_python(repo_root), str(target), *sys.argv[1:]]
+    proc = subprocess.run(cmd, cwd=Path.cwd(), env=env, check=False)
+    return proc.returncode
 
 
-content = None
-for attempt in range(1, 4):
-    content = call_llm()
-    try:
-        start = content.index('{')
-        end = content.rindex('}') + 1
-        candidate = json.loads(content[start:end])
-        episode_summary = candidate.get("episode_summary", "")
-        x_post = candidate.get("x_post", {})
-        clips = candidate.get("clips", [])
-        if not episode_summary or not x_post.get("text"):
-            raise ValueError("missing episode_summary or x_post.text")
-        if not 6 <= len(clips) <= 12:
-            raise ValueError(f"got {len(clips)} clips; expected 6-12")
-        validate_clips(clips, segs, min_duration=35, max_duration=75)
-        break
-    except (ValueError, json.JSONDecodeError) as exc:
-        print(f"[curate] attempt {attempt}/3 invalid: {exc}", file=sys.stderr)
-        if attempt == 3:
-            sys.exit(f"curate failed after 3 attempts: {exc}")
-
-episode_data = {
-    "podcast_slug": PODCAST_SLUG,
-    "episode_slug": EPISODE_SLUG,
-    "episode_title": EPISODE_TITLE_RAW,
-    "episode_summary": episode_summary,
-    "x_post": x_post,
-    "clips": clips,
-}
-with open(WORK_DIR / "episode_data.json", "w") as f:
-    json.dump(episode_data, f, ensure_ascii=False, indent=2)
-with open(WORK_DIR / "clips.json", "w") as f:
-    json.dump(clips, f, ensure_ascii=False, indent=2)
-
-print(f"episode_summary: {episode_summary[:80]}...")
-print(f"x_post: {x_post['text'][:60]}")
-print(f"clips ({len(clips)}):")
-for clip in clips:
-    print(f"  {clip['start']:.0f}-{clip['end']:.0f}s | {clip['title']}")
+if __name__ == "__main__":
+    sys.exit(main())
