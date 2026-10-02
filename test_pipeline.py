@@ -418,7 +418,9 @@ class TestUploadScripts(unittest.TestCase):
         return module
 
     def test_tiktok_uploaders_accept_root_captions(self):
-        for script_path in ("scripts/tiktok_upload.py", "hermes-skill/scripts/tiktok_upload.py"):
+        # Single maintained implementation: scripts/tiktok_upload.py.
+        # (hermes-skill copy is a thin shim — no longer importable as a module.)
+        for script_path in ("scripts/tiktok_upload.py",):
             with self.subTest(script=script_path):
                 module = self.load_tiktok_uploader(script_path)
                 with patch.object(module, "upload_clip", return_value={"status": "inbox"}) as upload:
@@ -427,8 +429,55 @@ class TestUploadScripts(unittest.TestCase):
                 self.assertEqual(status, 0)
                 self.assertEqual(upload.call_count, 2)
 
+    def test_tiktok_upload_shim_forwards(self):
+        """Shim in hermes-skill/scripts/tiktok_upload.py forwards to the real script
+        via subprocess. Running it produces real-script error output (e.g. OAuth missing,
+        captions file missing, or live API 401) rather than any shim-level error string
+        such as "target script missing" or "could not find the podcast-clips repository".
+        We cannot easily mock network in a subprocess, so any real-script error text counts
+        as success — what we are really testing is the forward was routed correctly."""
+        import subprocess as _sp
+        shim = str(REPO_DIR / "hermes-skill/scripts/tiktok_upload.py")
+        # Fake token file so OAuth guard passes (forces the real script to move past
+        # the "Belum OAuth" error to a later guard — in practice this hits the live
+        # TikTok API with a bad token and returns a 401 body).
+        token_path = self.tmp / "tiktok_token_fake.json"
+        token_path.write_text(json.dumps({"access_token": "fake-test", "open_id": "fake-open"}))
+        env = os.environ.copy()
+        env["PODCAST_WORK_DIR"] = str(self.tmp)
+        env["TIKTOK_TOKEN_FILE"] = str(token_path)
+        proc = _sp.run(
+            [sys.executable, shim, "all"],
+            cwd=str(self.tmp),
+            env=env,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        combined = proc.stdout + proc.stderr
+        # MUST NOT contain shim-level errors. If it does, forwarding failed.
+        self.assertNotIn("target script missing", combined)
+        self.assertNotIn("hermes-skill shim could not find", combined)
+        # MUST contain something identifiable as the REAL tiktok_upload.py output
+        # (its emoji ❌ error prefix, the OAuth URL, or captions file text).
+        self.assertTrue(
+            any(marker in combined for marker in (
+                "❌",
+                "Captions file not found",
+                "Belum OAuth",
+                "tiktok-auth",
+                "access_token_invalid",
+                "access_token is invalid",
+            )),
+            msg=f"Shim output looks wrong — no real tiktok_upload markers found. stdout/stderr: {combined}"
+        )
+        # Real script returns 0 (no success for every clip with explicit per-item
+        # failure markers in output) or 1 on global missing-input exits. Both accept.
+        self.assertIn(proc.returncode, (0, 1))
+
     def test_tiktok_uploaders_fail_on_missing_inputs_before_upload(self):
-        for script_path in ("scripts/tiktok_upload.py", "hermes-skill/scripts/tiktok_upload.py"):
+        # Single maintained implementation: scripts/tiktok_upload.py.
+        for script_path in ("scripts/tiktok_upload.py",):
             with self.subTest(script=script_path):
                 module = self.load_tiktok_uploader(script_path)
                 (self.tmp / "captions.json").unlink()

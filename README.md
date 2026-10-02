@@ -131,9 +131,28 @@ uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
 
-# Install skill
+# Install skill (recommended: symlink)
 mkdir -p ~/.hermes/skills/media/
-cp -r hermes-skill ~/.hermes/skills/media/podcast-clipping
+# Symlink the hermes-skill folder into Hermes skills dir (RECOMMENDED).
+# After this: edit files in /path/to/podcast-clips/hermes-skill/ and the
+# installed skill changes instantly — no re-install ever again. This also
+# fixes drift: repo SKILL.md becomes the runtime SKILL.md Hermes reads.
+ln -s "$(pwd)/hermes-skill" ~/.hermes/skills/media/podcast-clipping
+
+# --- Fallback: copy-only install (if symlinks are unavailable) ---
+# rm -rf ~/.hermes/skills/media/podcast-clipping
+# cp -r hermes-skill ~/.hermes/skills/media/podcast-clipping
+# ^ Re-run this every time you edit SKILL.md or any shim in hermes-skill/.
+
+# The shims in hermes-skill/scripts/*.py forward each call to the single
+# maintained copy in the repo root (either <repo>/*.py or <repo>/scripts/*.py).
+# No manual mirroring of pipeline logic required.
+
+# Optional: if you cloned the repo somewhere OTHER than ~/podcast-clips,
+# set these two env vars in your shell profile (otherwise defaults are fine
+# for the standard checkout):
+#   export PODCAST_CLIPS_REPO=/path/to/your/checkout/podcast-clips
+#   export PODCAST_CLIPS_PYTHON=/path/to/your/checkout/.venv/bin/python
 
 # Setup credentials
 cp .env.example app/.env

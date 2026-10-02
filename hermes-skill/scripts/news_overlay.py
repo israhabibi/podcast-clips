@@ -1,58 +1,76 @@
-"""Create a compact, readable ASS source card for vertical clips."""
+#!/usr/bin/env python3
+"""Hermes-skill shim: forwards execution to the single maintained copy in the podcast-clips repo.
 
-import math
-import re
-import textwrap
-from urllib.parse import urlsplit
+Runtime contract (safe for Hermes chat sessions):
+- CWD preserved unchanged (Hermes typically sets this to a /tmp/podcast-clips/<episode-id> workdir).
+- PYTHONPATH prepended with the repo root so imports like `from scripts.youtube_upload import upload_clip` resolve.
+- PODCAST_WORK_DIR defaulted to CWD if not already set OR set to empty string (but never overrides a real value).
+- Python interpreter chosen: `${REPO_ROOT}/.venv/bin/python > PODCAST_CLIPS_PYTHON env > current sys.executable`.
+- If repo cannot be found at the default location, print a clear error instead of silently failing.
+"""
+from __future__ import annotations
 
-
-def _timestamp(seconds):
-    centiseconds = round(seconds * 100)
-    hours, centiseconds = divmod(centiseconds, 360000)
-    minutes, centiseconds = divmod(centiseconds, 6000)
-    whole_seconds, centiseconds = divmod(centiseconds, 100)
-    return f"{hours}:{minutes:02d}:{whole_seconds:02d}.{centiseconds:02d}"
-
-
-def _source_label(url):
-    host = (urlsplit(url).hostname or "").lower().removeprefix("www.")
-    parts = host.split(".")
-    if len(parts) >= 3 and parts[-2] in {"co", "com", "net", "org", "gov"}:
-        return parts[-3].upper()
-    return parts[-2].upper() if len(parts) >= 2 else host.upper()
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
 
-def build_news_overlay_event(sources, clip_duration, *, display_seconds=6, max_sources=3):
-    """Return one upper-left source-card event, or None when no valid sources exist."""
-    if isinstance(clip_duration, bool) or not isinstance(clip_duration, (int, float)):
-        raise ValueError("Clip duration must be a finite number.")
-    if not math.isfinite(clip_duration) or clip_duration <= 0:
-        raise ValueError("Clip duration must be a finite positive number.")
+def _repo_root() -> Path:
+    override = os.environ.get("PODCAST_CLIPS_REPO")
+    if override:
+        return Path(override).expanduser().resolve()
+    default = Path("~/podcast-clips").expanduser().resolve()
+    if default.is_dir():
+        return default
+    raise SystemExit(
+        "hermes-skill shim could not find the podcast-clips repository at: "
+        + str(default)
+        + "\nEither set PODCAST_CLIPS_REPO=/absolute/path/to/podcast-clips env var, or "
+        + "clone it to the default location ~/podcast-clips."
+    )
 
-    lines = ["SUMBER TERKAIT"]
-    for source in sources[:max_sources] if isinstance(sources, list) else []:
-        if not isinstance(source, dict):
-            continue
-        title = source.get("title")
-        url = source.get("url")
-        if not isinstance(title, str) or not isinstance(url, str):
-            continue
-        parsed = urlsplit(url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
-            continue
-        safe_title = re.sub(r"[{}\\\r\n]+", " ", title).strip()
-        if not safe_title:
-            continue
-        label = _source_label(url)
-        item_lines = textwrap.wrap(
-            f"- {label}: {safe_title}", width=44, max_lines=1, placeholder="..."
+
+def _python(repo_root: Path) -> str:
+    override = os.environ.get("PODCAST_CLIPS_PYTHON")
+    if override:
+        return override
+    venv_python = repo_root / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return sys.executable
+
+
+def main() -> int:
+    try:
+        repo_root = _repo_root()
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    target = (repo_root / "news_overlay.py").resolve()
+    if not target.is_file():
+        print(
+            f"hermes-skill shim: target script missing: {target}\n"
+            f"(repo_root={repo_root})",
+            file=sys.stderr,
         )
-        lines.extend(item_lines)
-    if len(lines) == 1:
-        return None
+        return 2
 
-    lines.append("Link lengkap di caption")
-    end = float(clip_duration)
-    start = max(0.0, end - min(display_seconds, end))
-    text = r"{\an7\pos(64,120)}" + r"\N".join(lines)
-    return f"Dialogue: 1,{_timestamp(start)},{_timestamp(end)},SourceCard,,0,0,0,,{text}"
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "").strip()
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else str(repo_root)
+    )
+    env.setdefault("PODCAST_CLIPS_REPO", str(repo_root))
+    if "PODCAST_WORK_DIR" not in env or env["PODCAST_WORK_DIR"] in (None, ""):
+        # Hermes typically runs the skill from inside the episode workdir, so cwd == workdir.
+        env["PODCAST_WORK_DIR"] = str(Path.cwd())
+
+    cmd = [_python(repo_root), str(target), *sys.argv[1:]]
+    proc = subprocess.run(cmd, cwd=Path.cwd(), env=env, check=False)
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -17,7 +17,10 @@ This document describes the desired behavior and implementation boundaries. Revi
 | `cut.py` and `cut_smart.py` | Source video, clip JSON, transcript | Rendered MP4 files | Metadata must be valid before invoking FFmpeg. |
 | Upload scripts | Captions, MP4 files, shared OAuth tokens | External publication | Uploads must match reviewed media and be safe to retry. |
 
-The repository contains mirrored pipeline scripts under `hermes-skill/scripts/`. A fix to a root script or `scripts/` must also be applied to its mirror, or the duplication should be removed by making the skill invoke one maintained implementation. Avoid independent behavior in the two copies.
+All pipeline scripts live in exactly ONE place:
+- top-level scripts (`caption.py`, `clip_quality.py`, `curate.py`, `cut.py`, `cut_smart.py`, `news_overlay.py`) at the repo root;
+- utility scripts (`tiktok_upload.py`, `youtube_upload.py`, `youtube_transcript_to_segments.py`, `admin_queue.py`, `process_episode.py`, `build_compilation.py`, `top5_compilation.py`, etc.) under `<repo>/scripts/`.
+Hermes-skill ships a thin shim per pipeline script in `hermes-skill/scripts/` that forwards argv/env/CWD to the maintained copy above. After a pipeline script change you only need to re-run `cp -r hermes-skill ~/.hermes/skills/media/podcast-clipping` if the install step changed (normally once per machine setup). Override env vars are provided for nonstandard checkouts: `PODCAST_CLIPS_REPO=<abs_path>` and `PODCAST_CLIPS_PYTHON=<abs_python_interp>`. Do NOT edit the shim copies independently; fix only the single maintained implementation.
 
 ### Current admin entry point
 

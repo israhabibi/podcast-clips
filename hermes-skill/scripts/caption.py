@@ -1,52 +1,76 @@
 #!/usr/bin/env python3
-"""Caption + link berita terkait per klip via LLM + web search.
-LLM generates hook + hashtags only. All 3 news links are force-appended
-programmatically after the LLM call as raw URLs (no header/emoji/title).
+"""Hermes-skill shim: forwards execution to the single maintained copy in the podcast-clips repo.
+
+Runtime contract (safe for Hermes chat sessions):
+- CWD preserved unchanged (Hermes typically sets this to a /tmp/podcast-clips/<episode-id> workdir).
+- PYTHONPATH prepended with the repo root so imports like `from scripts.youtube_upload import upload_clip` resolve.
+- PODCAST_WORK_DIR defaulted to CWD if not already set OR set to empty string (but never overrides a real value).
+- Python interpreter chosen: `${REPO_ROOT}/.venv/bin/python > PODCAST_CLIPS_PYTHON env > current sys.executable`.
+- If repo cannot be found at the default location, print a clear error instead of silently failing.
 """
-import json, sys, os, urllib.request
+from __future__ import annotations
 
-KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
-if not KEY:
-    for line in open(os.path.expanduser("~/.hermes/.env")):
-        if line.startswith("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY="):
-            KEY = line.strip().split("=", 1)[1].strip().strip('"')
+import os
+import shutil
+import subprocess
+import sys
+from pathlib import Path
 
-MODEL = sys.argv[1] if len(sys.argv) > 1 else "MiniMax-M2.7-highspeed"
-clips = json.load(open("clips.json"))
-segs = json.load(open("transcript.json"))
 
-print(f"transkrip: {len(segs)} segmen, awal: {segs[0]['text'][:80]}")
+def _repo_root() -> Path:
+    override = os.environ.get("PODCAST_CLIPS_REPO")
+    if override:
+        return Path(override).expanduser().resolve()
+    default = Path("~/podcast-clips").expanduser().resolve()
+    if default.is_dir():
+        return default
+    raise SystemExit(
+        "hermes-skill shim could not find the podcast-clips repository at: "
+        + str(default)
+        + "\nEither set PODCAST_CLIPS_REPO=/absolute/path/to/podcast-clips env var, or "
+        + "clone it to the default location ~/podcast-clips."
+    )
 
-search_data = json.load(open("search_results.json")) if os.path.exists("search_results.json") else {}
 
-def llm(prompt):
-    req = urllib.request.Request(
-        "https://ai.sumopod.com/v1/chat/completions",
-        data=json.dumps({"model": MODEL,
-                         "messages": [{"role": "user", "content": prompt}],
-                         "temperature": 0.3}).encode(),
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
-    return json.load(urllib.request.urlopen(req, timeout=300))["choices"][0]["message"]["content"]
+def _python(repo_root: Path) -> str:
+    override = os.environ.get("PODCAST_CLIPS_PYTHON")
+    if override:
+        return override
+    venv_python = repo_root / ".venv" / "bin" / "python"
+    if venv_python.is_file():
+        return str(venv_python)
+    return sys.executable
 
-results = {}
-for i, c in enumerate(clips, 1):
-    t0, t1 = float(c["start"]), float(c["end"])
-    text = " ".join(s["text"] for s in segs if s["end"] > t0 and s["start"] < t1)
-    found = search_data.get(str(i)) or search_data.get(i) or []
-    cap = llm(f"""Klip podcast ini tentang rokok ilegal & pita cukai di Indonesia.
-Buat caption TikTok: 1-2 kalimat hook menarik + 1-3 hashtag bahasa Indonesia.
-TOPIK KLIP INI: {c["title"]}
-JANGAN tulis link apapun.
 
-Transkrip: {text[:1200]}
+def main() -> int:
+    try:
+        repo_root = _repo_root()
+    except SystemExit as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    target = (repo_root / "caption.py").resolve()
+    if not target.is_file():
+        print(
+            f"hermes-skill shim: target script missing: {target}\n"
+            f"(repo_root={repo_root})",
+            file=sys.stderr,
+        )
+        return 2
 
-Balas HANYA caption-nya, tanpa header/emoji.""")
-    if found:
-        for f in found:
-            cap += f"\n{f['url']}"
-    results[str(i)] = {"clip": f"clip{i:02d}.mp4", "title": c["title"], "caption": cap.strip()}
-    print(f"clip{i:02d}: {c['title']}")
-    print(f"  => {cap.strip()[:80]}")
+    env = os.environ.copy()
+    existing_pp = env.get("PYTHONPATH", "").strip()
+    env["PYTHONPATH"] = (
+        f"{repo_root}{os.pathsep}{existing_pp}" if existing_pp else str(repo_root)
+    )
+    env.setdefault("PODCAST_CLIPS_REPO", str(repo_root))
+    if "PODCAST_WORK_DIR" not in env or env["PODCAST_WORK_DIR"] in (None, ""):
+        # Hermes typically runs the skill from inside the episode workdir, so cwd == workdir.
+        env["PODCAST_WORK_DIR"] = str(Path.cwd())
 
-json.dump(results, open("captions.json","w"), ensure_ascii=False, indent=2)
-print("saved captions.json")
+    cmd = [_python(repo_root), str(target), *sys.argv[1:]]
+    proc = subprocess.run(cmd, cwd=Path.cwd(), env=env, check=False)
+    return proc.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())
