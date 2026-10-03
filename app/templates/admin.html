@@ -1,292 +1,1652 @@
 <!doctype html>
-<html lang="en">
+<html lang="id">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Admin - Podcast Clips</title>
+    <title>Admin — Podcast Clips</title>
     <style>
-        :root { color-scheme: dark; font-family: system-ui, sans-serif; }
-        body { margin: 0; background: #111; color: #f5f5f5; }
-        header, main { max-width: 940px; margin: auto; padding: 20px; }
-        header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-        h1 { font-size: 1.8rem; margin: 12px 0 4px; }
-        h2 { font-size: 1.2rem; margin: 0 0 16px; }
-        p { color: #aaa; line-height: 1.5; }
-        a { color: #ff7777; }
-        button, .button { display: inline-block; padding: 10px 15px; border: 0; border-radius: 8px; background: #df3030; color: white; text-decoration: none; font: inherit; font-weight: 700; cursor: pointer; }
-        button.secondary { background: #333; }
-        .top-actions { display: flex; gap: 12px; align-items: center; }
+        :root {
+            color-scheme: dark;
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Inter", sans-serif;
+            --bg: #0b0d12;
+            --bg-elev: #12161f;
+            --bg-elev-2: #191e2b;
+            --surface: #10141d;
+            --border: #252c3d;
+            --border-strong: #37415a;
+            --text: #e6e8ef;
+            --text-muted: #9aa3b8;
+            --text-dim: #6b7591;
+            --accent: #ef4444;
+            --accent-hover: #dc2626;
+            --accent-soft: rgba(239, 68, 68, 0.12);
+            --primary: #6366f1;
+            --primary-hover: #4f46e5;
+            --primary-soft: rgba(99, 102, 241, 0.12);
+            --success: #10b981;
+            --success-soft: rgba(16, 185, 129, 0.13);
+            --warning: #f59e0b;
+            --warning-soft: rgba(245, 158, 11, 0.13);
+            --danger: #ef4444;
+            --danger-soft: rgba(239, 68, 68, 0.13);
+            --radius-sm: 8px;
+            --radius: 12px;
+            --radius-lg: 16px;
+            --shadow-sm: 0 1px 2px rgba(0,0,0,.35), 0 1px 1px rgba(0,0,0,.2);
+            --shadow: 0 8px 24px rgba(0,0,0,.45), 0 2px 4px rgba(0,0,0,.35);
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+            background:
+                radial-gradient(1200px 700px at -10% -20%, rgba(99,102,241,.09), transparent 60%),
+                radial-gradient(1000px 600px at 120% -10%, rgba(239,68,68,.07), transparent 60%),
+                var(--bg);
+            color: var(--text);
+            min-height: 100vh;
+            -webkit-font-smoothing: antialiased;
+            text-rendering: optimizeLegibility;
+            font-feature-settings: "cv11";
+            line-height: 1.55;
+        }
+        .app-shell {
+            max-width: 1180px;
+            margin: 0 auto;
+            padding: 28px 28px 80px;
+        }
+        /* Header / Nav */
+        .topbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px 18px;
+            background: linear-gradient(180deg, rgba(18,22,31,.9), rgba(18,22,31,.55));
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            backdrop-filter: blur(8px);
+            margin-bottom: 24px;
+            box-shadow: var(--shadow-sm);
+        }
+        .brand {
+            display: flex; align-items: center; gap: 12px; min-width: 0;
+        }
+        .brand-logo {
+            width: 38px; height: 38px; border-radius: 10px;
+            background:
+                radial-gradient(circle at 30% 20%, #ff6b6b 0%, transparent 55%),
+                radial-gradient(circle at 70% 80%, #6366f1 0%, transparent 55%),
+                linear-gradient(135deg, #ef4444, #4f46e5);
+            box-shadow: 0 0 0 1px rgba(255,255,255,.05), inset 0 0 20px rgba(255,255,255,.08);
+            position: relative;
+            flex-shrink: 0;
+        }
+        .brand-logo::after {
+            content: "";
+            position: absolute;
+            inset: 9px;
+            border: 1.5px solid rgba(255,255,255,.82);
+            border-radius: 4px;
+        }
+        .brand-title {
+            display: flex; flex-direction: column; min-width: 0;
+        }
+        .brand-title h1 {
+            margin: 0;
+            font-size: 1.06rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            line-height: 1.15;
+        }
+        .brand-title small {
+            color: var(--text-muted);
+            font-size: .8rem;
+            margin-top: 2px;
+        }
+        .top-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
         .top-actions form { margin: 0; }
-        .card { background: #1c1c1c; border: 1px solid #383838; border-radius: 14px; padding: 24px; margin-bottom: 20px; }
-        .accounts { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
-        .account { border: 1px solid #444; border-radius: 10px; padding: 18px; }
-        .account h3 { margin: 0 0 8px; }
-        .account p { margin: 0 0 16px; }
-        .status { display: inline-block; margin-bottom: 12px; padding: 3px 9px; border-radius: 20px; background: #333; font-size: .82rem; }
-        .connected { background: #205a38; }
-        label { display: block; margin: 14px 0 6px; font-weight: 600; }
-        input, select { width: 100%; box-sizing: border-box; padding: 11px; border: 1px solid #555; border-radius: 8px; background: #101010; color: white; font: inherit; }
-        .notice { margin-bottom: 20px; padding: 12px; border-radius: 8px; background: #264b32; }
-        .notice.error { background: #592222; }
-        .table-wrap { overflow-x: auto; }
-        table { width: 100%; border-collapse: collapse; }
-        th, td { text-align: left; padding: 10px; border-bottom: 1px solid #383838; vertical-align: top; }
-        th { color: #aaa; font-size: .85rem; }
-        small { color: #aaa; }
-        .job-stage { display: block; min-width: 150px; margin-bottom: 6px; }
-        progress { display: block; width: 150px; height: 6px; accent-color: #ef5555; }
-        @media (max-width: 600px) { header { align-items: flex-start; } .top-actions { flex-direction: column; align-items: flex-end; } }
+        .ghost-link {
+            color: var(--text-muted);
+            text-decoration: none;
+            padding: 8px 12px;
+            border-radius: var(--radius-sm);
+            font-size: .88rem;
+            font-weight: 500;
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,.02);
+            transition: background .15s ease, color .15s ease, border-color .15s ease, transform .05s ease;
+        }
+        .ghost-link:hover { color: var(--text); background: rgba(255,255,255,.05); border-color: var(--border-strong); }
+        /* Buttons */
+        button, .btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            padding: 9px 14px;
+            border: 1px solid transparent;
+            border-radius: var(--radius-sm);
+            font: inherit;
+            font-weight: 600;
+            font-size: .87rem;
+            cursor: pointer;
+            text-decoration: none;
+            white-space: nowrap;
+            transition: background .15s ease, border-color .15s ease, transform .05s ease, box-shadow .15s ease, color .15s ease, opacity .15s ease;
+            line-height: 1.25;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button:active, .btn:active { transform: translateY(1px); }
+        button:disabled, .btn:disabled { opacity: .55; cursor: not-allowed; }
+        button:focus-visible, .btn:focus-visible,
+        input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible {
+            outline: 2px solid var(--primary);
+            outline-offset: 2px;
+        }
+        .btn-primary {
+            background: linear-gradient(180deg, var(--accent), var(--accent-hover));
+            color: #fff;
+            border-color: rgba(255,255,255,.08);
+            box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 4px 14px rgba(239,68,68,.18);
+        }
+        .btn-primary:hover { filter: brightness(1.06); }
+        .btn-secondary {
+            background: var(--bg-elev-2);
+            color: var(--text);
+            border-color: var(--border-strong);
+        }
+        .btn-secondary:hover {
+            background: #202638;
+            border-color: #4a5578;
+        }
+        .btn-ghost {
+            background: transparent;
+            color: var(--text-muted);
+            border-color: var(--border);
+            padding: 7px 11px;
+            font-size: .8rem;
+            font-weight: 500;
+        }
+        .btn-ghost:hover {
+            color: var(--text);
+            background: rgba(255,255,255,.04);
+            border-color: var(--border-strong);
+        }
+        .btn-indigo {
+            background: linear-gradient(180deg, #6366f1, #4f46e5);
+            color: #fff;
+            box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 4px 14px rgba(99,102,241,.22);
+        }
+        .btn-indigo:hover { filter: brightness(1.08); }
+        .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
+        /* Cards / sections */
+        .card {
+            background: linear-gradient(180deg, rgba(18,22,31,.95), rgba(16,20,29,.85));
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 26px 26px 24px;
+            margin-bottom: 22px;
+            box-shadow: var(--shadow-sm);
+            position: relative;
+            overflow: hidden;
+        }
+        .card::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            background: linear-gradient(180deg, rgba(255,255,255,.04), transparent 35%);
+        }
+        .card-inner { position: relative; }
+        .card-header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            margin-bottom: 18px;
+        }
+        .card-header h2 {
+            margin: 0 0 4px;
+            font-size: 1.08rem;
+            font-weight: 700;
+            letter-spacing: -0.01em;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .card-header h2::before {
+            content: "";
+            width: 3px;
+            height: 18px;
+            border-radius: 2px;
+            background: linear-gradient(180deg, var(--accent), var(--primary));
+            display: inline-block;
+        }
+        .card-header .subtitle {
+            margin: 0;
+            color: var(--text-muted);
+            font-size: .88rem;
+        }
+        .card-badge {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 4px 10px;
+            border-radius: 999px;
+            font-size: .72rem;
+            font-weight: 600;
+            letter-spacing: .02em;
+            text-transform: uppercase;
+            border: 1px solid var(--border-strong);
+            color: var(--text-muted);
+            background: rgba(255,255,255,.025);
+        }
+        /* Pills / status chips */
+        .chip {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 3px 10px;
+            border-radius: 999px;
+            font-size: .75rem;
+            font-weight: 600;
+            letter-spacing: .01em;
+            border: 1px solid transparent;
+            line-height: 1.45;
+        }
+        .chip::before {
+            content: "";
+            width: 6px; height: 6px; border-radius: 999px;
+            background: currentColor;
+            opacity: .8;
+        }
+        .chip-neutral {
+            background: rgba(255,255,255,.04);
+            color: var(--text-muted);
+            border-color: var(--border-strong);
+        }
+        .chip-success { background: var(--success-soft); color: #5bd9a8; border-color: rgba(16,185,129,.28); }
+        .chip-warning { background: var(--warning-soft); color: #ffcc66; border-color: rgba(245,158,11,.28); }
+        .chip-danger { background: var(--danger-soft); color: #ff9b9b; border-color: rgba(239,68,68,.3); }
+        .chip-indigo { background: var(--primary-soft); color: #a5b4fc; border-color: rgba(99,102,241,.28); }
+        .chip-accent { background: var(--accent-soft); color: #fca5a5; border-color: rgba(239,68,68,.3); }
+
+        a { color: #93c5fd; text-decoration: none; }
+        a:hover { color: #c3dcff; text-decoration: underline; text-underline-offset: 2px; }
+
+        /* Notices */
+        .notice-stack { margin: 0 0 22px; display: flex; flex-direction: column; gap: 10px; }
+        .notice {
+            display: flex;
+            gap: 12px;
+            align-items: flex-start;
+            padding: 14px 16px;
+            border-radius: var(--radius);
+            border: 1px solid;
+            font-size: .9rem;
+        }
+        .notice::before {
+            content: "ℹ";
+            width: 22px; height: 22px; border-radius: 999px;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-weight: 800; flex-shrink: 0; font-size: .8rem;
+            margin-top: 1px;
+        }
+        .notice.success {
+            background: var(--success-soft);
+            color: #cbf3de;
+            border-color: rgba(16,185,129,.3);
+        }
+        .notice.success::before { background: rgba(16,185,129,.3); color: #10b981; content: "✓"; }
+        .notice.error {
+            background: var(--danger-soft);
+            color: #ffd6d6;
+            border-color: rgba(239,68,68,.32);
+        }
+        .notice.error::before { background: rgba(239,68,68,.28); color: #ff8585; content: "!"; font-size: 1rem; }
+        .notice.info {
+            background: var(--primary-soft);
+            color: #d6dbff;
+            border-color: rgba(99,102,241,.3);
+        }
+        .notice.info::before { background: rgba(99,102,241,.3); color: #c7d2fe; }
+
+        /* Accounts grid */
+        .accounts-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+        }
+        .account-card {
+            background: rgba(255,255,255,.025);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            padding: 20px 20px 18px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            position: relative;
+            overflow: hidden;
+        }
+        .account-card::after {
+            content: "";
+            position: absolute;
+            top: -40px; right: -40px;
+            width: 140px; height: 140px; border-radius: 999px;
+            background: radial-gradient(circle, rgba(99,102,241,.18), transparent 60%);
+            pointer-events: none;
+        }
+        .account-card[data-provider="youtube"]::after { background: radial-gradient(circle, rgba(239,68,68,.18), transparent 60%); }
+        .account-head {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 12px;
+        }
+        .provider {
+            display: flex; flex-direction: column; gap: 4px;
+        }
+        .provider-name {
+            font-weight: 700;
+            font-size: .98rem;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .provider-icon {
+            width: 30px; height: 30px; border-radius: 8px;
+            display: inline-flex; align-items: center; justify-content: center;
+            font-weight: 900; font-size: .72rem;
+            color: #fff;
+        }
+        .provider-icon.youtube { background: linear-gradient(135deg, #ff0000, #ff5555); }
+        .provider-icon.tiktok  { background: linear-gradient(135deg, #000000, #25f4ee 70%, #fe2c55); }
+        .provider-desc {
+            color: var(--text-muted);
+            font-size: .84rem;
+            margin: 0;
+        }
+        .account-foot {
+            margin-top: auto;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            justify-content: space-between;
+        }
+        .account-foot small {
+            color: var(--text-dim);
+        }
+
+        /* Forms */
+        .form-grid {
+            display: grid;
+            gap: 14px 18px;
+        }
+        .two-col { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+        label {
+            display: block;
+            margin: 0 0 6px;
+            font-weight: 600;
+            font-size: .84rem;
+            color: #cdd3e1;
+        }
+        label .hint {
+            font-weight: 400;
+            color: var(--text-dim);
+            margin-left: 6px;
+            font-size: .78rem;
+        }
+        input, select, textarea {
+            width: 100%;
+            padding: 11px 13px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-strong);
+            background: var(--bg);
+            color: var(--text);
+            font: inherit;
+            font-size: .92rem;
+            transition: border-color .15s ease, box-shadow .15s ease, background .15s ease;
+        }
+        input::placeholder, textarea::placeholder { color: var(--text-dim); }
+        input:hover, select:hover, textarea:hover { border-color: #4b5778; background: #0d111a; }
+        input:focus, select:focus, textarea:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px rgba(99,102,241,.18);
+            background: #0d111a;
+            outline: none;
+        }
+        textarea { min-height: 6em; resize: vertical; line-height: 1.55; }
+        textarea.monospaced, code.monospaced {
+            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-size: .82rem;
+            letter-spacing: .01em;
+        }
+        .field-hint {
+            color: var(--text-muted);
+            font-size: .78rem;
+            margin-top: 6px;
+            display: block;
+        }
+        .field-hint.status-text { color: var(--text-muted); }
+        .field-hint.status-text.ok { color: #5bd9a8; }
+        .field-hint.status-text.warn { color: #ffcc66; }
+        .field-hint.status-text.err { color: #ff9b9b; }
+
+        /* -------- Pagination -------- */
+        .pagination {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 14px;
+            padding: 14px 16px;
+            background: linear-gradient(180deg, rgba(255,255,255,.02), rgba(255,255,255,.005));
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            margin-top: 14px;
+            flex-wrap: wrap;
+        }
+        .pagination.top { margin-top: 0; margin-bottom: 12px; }
+        .pagination-summary {
+            color: var(--text-muted);
+            font-size: .84rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            min-width: 180px;
+        }
+        .pagination-summary strong { color: var(--text); font-weight: 700; }
+        .pagination-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+        }
+        .page-btn {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            min-width: 34px;
+            height: 34px;
+            padding: 0 10px;
+            border-radius: var(--radius-sm);
+            border: 1px solid var(--border-strong);
+            background: var(--bg-elev-2);
+            color: var(--text);
+            font-weight: 600;
+            font-size: .82rem;
+            text-decoration: none;
+            cursor: pointer;
+            transition: background .15s ease, border-color .15s ease, color .15s ease, transform .05s ease;
+            user-select: none;
+        }
+        .page-btn:hover:not(:disabled):not(.current) {
+            background: #202638;
+            border-color: #4a5578;
+            color: var(--text);
+            text-decoration: none;
+        }
+        .page-btn:active:not(:disabled) { transform: translateY(1px); }
+        .page-btn.current {
+            background: linear-gradient(180deg, #6366f1, #4f46e5);
+            border-color: rgba(99,102,241,.45);
+            color: #fff;
+            box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 4px 14px rgba(99,102,241,.22);
+            cursor: default;
+        }
+        .page-btn:disabled {
+            opacity: .45;
+            cursor: not-allowed;
+            background: var(--bg-elev);
+            border-color: var(--border);
+        }
+        .page-ellipsis {
+            display: inline-flex;
+            align-items: flex-end;
+            justify-content: center;
+            width: 30px;
+            height: 34px;
+            color: var(--text-dim);
+            font-weight: 700;
+            letter-spacing: 2px;
+        }
+        .per-page-form {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            color: var(--text-muted);
+            font-size: .82rem;
+            font-weight: 500;
+        }
+        .per-page-form select {
+            width: auto;
+            padding: 7px 30px 7px 10px;
+            font-size: .82rem;
+            min-width: 80px;
+        }
+        .per-page-form form { margin: 0; display: inline; }
+
+        /* Tables */
+        .table-wrap {
+            overflow-x: auto;
+            border-radius: var(--radius);
+            border: 1px solid var(--border);
+            background: rgba(255,255,255,.01);
+            margin-top: 8px;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: .87rem;
+        }
+        thead th {
+            position: sticky; top: 0;
+            text-align: left;
+            padding: 12px 14px;
+            background: linear-gradient(180deg, var(--bg-elev-2), var(--bg-elev));
+            color: var(--text-muted);
+            font-weight: 600;
+            font-size: .75rem;
+            letter-spacing: .03em;
+            text-transform: uppercase;
+            border-bottom: 1px solid var(--border);
+            white-space: nowrap;
+        }
+        tbody td {
+            padding: 14px;
+            border-bottom: 1px solid var(--border);
+            vertical-align: top;
+        }
+        tbody tr:hover td { background: rgba(255,255,255,.02); }
+        tbody tr:last-child td { border-bottom: none; }
+        .col-episode { min-width: 220px; }
+        .col-clip    { min-width: 260px; max-width: 420px; }
+        .col-status  { min-width: 200px; }
+        .col-action  { min-width: 240px; white-space: nowrap; }
+        .clip-title {
+            font-weight: 600;
+            color: var(--text);
+            display: block;
+        }
+        .clip-meta {
+            color: var(--text-muted);
+            font-size: .76rem;
+            display: block;
+            margin-top: 3px;
+        }
+        .status-stack { display: flex; flex-direction: column; gap: 5px; }
+        .status-error {
+            color: #ff9b9b;
+            font-size: .78rem;
+            display: block;
+            margin-top: 4px;
+            padding: 6px 10px;
+            background: var(--danger-soft);
+            border: 1px solid rgba(239,68,68,.22);
+            border-radius: 8px;
+            line-height: 1.45;
+        }
+        .status-id-link {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            color: #93c5fd;
+            font-family: ui-monospace, monospace;
+            font-size: .78rem;
+            margin-top: 3px;
+        }
+        .action-group { display: flex; gap: 8px; flex-wrap: wrap; align-items: flex-start; }
+
+        /* Manual upload expanded row */
+        .manual-row td {
+            padding: 0;
+            background: linear-gradient(180deg, rgba(99,102,241,.04), rgba(239,68,68,.02));
+            border-bottom: 1px solid var(--border);
+        }
+        .manual-panel {
+            display: grid;
+            grid-template-columns: minmax(0, 1.35fr) minmax(280px, 1fr);
+            gap: 22px;
+            padding: 20px 22px 22px;
+        }
+        .manual-col {
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+            min-width: 0;
+        }
+        .panel-subcard {
+            background: rgba(0,0,0,.25);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            padding: 16px;
+        }
+        .panel-subcard h4 {
+            margin: 0 0 10px;
+            font-size: .85rem;
+            text-transform: uppercase;
+            letter-spacing: .05em;
+            color: var(--text-muted);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .panel-subcard h4::before {
+            content: "";
+            width: 8px; height: 8px; border-radius: 999px;
+            background: var(--primary);
+        }
+        .hash-row {
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            flex-wrap: wrap;
+            margin-top: 6px;
+        }
+        .hash-box {
+            flex: 1;
+            min-width: 260px;
+            padding: 8px 10px;
+            background: #05070d;
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius-sm);
+            font-family: ui-monospace, monospace;
+            font-size: .76rem;
+            color: #d6dcef;
+            overflow-wrap: anywhere;
+            word-break: break-all;
+            line-height: 1.55;
+        }
+        .info-line {
+            display: flex;
+            gap: 8px;
+            padding: 6px 0;
+            font-size: .84rem;
+            border-bottom: 1px dashed var(--border);
+        }
+        .info-line:last-child { border-bottom: none; }
+        .info-label {
+            color: var(--text-muted);
+            font-weight: 600;
+            min-width: 110px;
+            flex-shrink: 0;
+        }
+        .info-value { color: var(--text); min-width: 0; overflow-wrap: anywhere; }
+        .studio-steps {
+            padding-left: 18px;
+            margin: 0;
+            color: var(--text);
+            font-size: .86rem;
+        }
+        .studio-steps li {
+            padding: 7px 0 7px 2px;
+            border-bottom: 1px dashed var(--border);
+            line-height: 1.5;
+        }
+        .studio-steps li:last-child { border-bottom: none; }
+        .studio-steps code {
+            background: rgba(99,102,241,.12);
+            color: #c7d2fe;
+            padding: 1px 6px;
+            border-radius: 4px;
+            font-size: .78rem;
+            border: 1px solid rgba(99,102,241,.2);
+        }
+        .copy-success-flash {
+            color: #5bd9a8 !important;
+            background: var(--success-soft) !important;
+            border-color: rgba(16,185,129,.3) !important;
+        }
+
+        /* Compilation */
+        .compilation-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+            gap: 12px 16px;
+            margin-top: 12px;
+        }
+        .comp-item {
+            padding: 14px;
+            background: rgba(255,255,255,.02);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+            position: relative;
+            transition: border-color .15s ease, transform .1s ease;
+        }
+        .comp-item:hover { border-color: #4b5778; }
+        .comp-item-num {
+            position: absolute;
+            top: -10px; left: 12px;
+            background: linear-gradient(135deg, #6366f1, #4f46e5);
+            color: #fff;
+            padding: 2px 10px;
+            border-radius: 999px;
+            font-size: .7rem;
+            font-weight: 700;
+            letter-spacing: .04em;
+            box-shadow: var(--shadow-sm);
+        }
+        .comp-item label {
+            margin-top: 2px;
+            color: var(--text-muted);
+            font-weight: 500;
+            font-size: .78rem;
+        }
+        .comp-item label + input { margin-top: 3px; }
+        .segment-buttons {
+            margin-top: 12px;
+            padding: 10px;
+            background: rgba(99,102,241,.06);
+            border: 1px dashed rgba(99,102,241,.25);
+            border-radius: var(--radius-sm);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+        .segment-buttons button {
+            font-size: .76rem;
+            padding: 5px 10px;
+            text-align: left;
+            white-space: normal;
+            line-height: 1.35;
+            flex: 0 1 auto;
+            max-width: calc(50% - 3px);
+        }
+        .compilation-video-wrap {
+            margin-top: 20px;
+            padding: 14px;
+            background: rgba(0,0,0,.35);
+            border: 1px solid var(--border-strong);
+            border-radius: var(--radius);
+        }
+        .compilation-video-wrap video {
+            display: block;
+            width: 100%;
+            max-height: 560px;
+            background: #000;
+            border-radius: var(--radius-sm);
+            aspect-ratio: 9 / 16;
+        }
+        .status-pill { color: inherit; }
+
+        /* Jobs / submissions grouped */
+        .job-cell { min-width: 260px; }
+        .job-stage {
+            display: block;
+            font-weight: 600;
+            color: var(--text);
+            margin-bottom: 4px;
+            font-size: .86rem;
+        }
+        .job-label {
+            color: var(--text-muted);
+            font-size: .78rem;
+            display: block;
+            margin-bottom: 8px;
+        }
+        progress {
+            display: block;
+            width: 100%;
+            height: 8px;
+            border-radius: 999px;
+            overflow: hidden;
+            border: 1px solid var(--border-strong);
+            background: var(--bg);
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        progress::-webkit-progress-bar { background: var(--bg); }
+        progress::-webkit-progress-value {
+            background: linear-gradient(90deg, #6366f1, #ef4444);
+            border-radius: 999px;
+        }
+        progress::-moz-progress-bar {
+            background: linear-gradient(90deg, #6366f1, #ef4444);
+            border-radius: 999px;
+        }
+
+        .submission-groups {
+            display: grid;
+            gap: 16px;
+            grid-template-columns: 1fr;
+        }
+        .sub-group {
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            background: linear-gradient(180deg, rgba(255,255,255,.015), rgba(255,255,255,0));
+            overflow: hidden;
+        }
+        .sub-group[aria-expanded="false"] .sub-group-items { display: none; }
+        .sub-group-head {
+            display: grid;
+            grid-template-columns: 220px 1fr auto auto;
+            gap: 14px 18px;
+            align-items: center;
+            padding: 14px 16px;
+            border-bottom: 1px solid rgba(255,255,255,.05);
+            background: rgba(99, 102, 241, .04);
+        }
+        .sub-group-thumb {
+            position: relative;
+            width: 100%;
+            max-width: 220px;
+            aspect-ratio: 16 / 9;
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            background: #000;
+            border: 1px solid var(--border-soft);
+            flex: 0 0 auto;
+            align-self: center;
+            justify-self: start;
+        }
+        .sub-group-thumb img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+            background: #000;
+        }
+        .sub-group-meta {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .sub-group-meta .sg-podcast {
+            color: var(--indigo-soft);
+            font-weight: 600;
+            font-size: .78rem;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+        }
+        .sub-group-meta .sg-title {
+            font-weight: 600;
+            line-height: 1.35;
+            color: var(--text);
+            overflow-wrap: anywhere;
+        }
+        .sub-group-meta .sg-times {
+            display: flex;
+            gap: 10px;
+            color: var(--text-muted);
+            font-size: .76rem;
+            flex-wrap: wrap;
+        }
+        .sub-group-meta .sg-link {
+            color: var(--text-muted);
+            font-family: ui-monospace, monospace;
+            font-size: .8rem;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            max-width: 100%;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .sub-group-meta .sg-link:hover { color: var(--primary); }
+        .sub-group-status {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-end;
+            gap: 8px;
+            justify-self: end;
+        }
+        .sub-group-counters {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 6px;
+            justify-content: flex-end;
+            max-width: 320px;
+        }
+        .sub-group-counters .mini-chip {
+            padding: 2px 8px;
+            border-radius: 999px;
+            font-size: .72rem;
+            border: 1px solid var(--border-soft);
+            background: rgba(255,255,255,.03);
+            color: var(--text-muted);
+        }
+        .sg-progress-wrap {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            justify-content: center;
+            width: 180px;
+            justify-self: end;
+        }
+        .sg-progress-wrap .sg-stage {
+            font-size: .8rem;
+            font-weight: 600;
+            color: var(--text);
+            display: flex;
+            justify-content: space-between;
+            align-items: baseline;
+        }
+        .sg-progress-wrap .sg-stage small {
+            font-size: .72rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+        .sg-toggle {
+            padding: 6px 10px;
+            font-size: .78rem;
+            min-width: 120px;
+        }
+        .sg-source-video-wrap {
+            margin: 12px 16px 0;
+            border-radius: var(--radius-sm);
+            overflow: hidden;
+            border: 1px solid var(--border-soft);
+            background: #000;
+            display: none;
+        }
+        .sg-source-video-wrap[aria-expanded="true"] { display: block; }
+        .sg-source-video-wrap iframe {
+            display: block;
+            width: 100%;
+            aspect-ratio: 16 / 9;
+            border: 0;
+        }
+        .sub-group-items {
+            padding: 8px 0 6px;
+        }
+        .sub-item {
+            display: grid;
+            grid-template-columns: 1fr 280px;
+            gap: 14px 20px;
+            padding: 10px 20px;
+            border-bottom: 1px dashed rgba(255,255,255,.05);
+            align-items: center;
+        }
+        .sub-item:last-child { border-bottom: 0; }
+        .sub-item-meta {
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .sub-item-meta .si-id {
+            font-family: ui-monospace, monospace;
+            color: var(--text-muted);
+            font-size: .74rem;
+        }
+        .sub-item-meta .si-when {
+            color: var(--text-muted);
+            font-size: .74rem;
+        }
+        .sub-item-meta .si-title {
+            font-size: .84rem;
+            color: var(--text);
+            font-weight: 500;
+            line-height: 1.4;
+            overflow-wrap: anywhere;
+        }
+        @media (max-width: 960px) {
+            .sub-group-head {
+                grid-template-columns: 1fr auto;
+            }
+            .sub-group-thumb { max-width: 100%; }
+            .sg-progress-wrap { width: 100%; justify-self: stretch; grid-column: 1 / -1; order: 10; }
+            .sub-group-status { grid-column: 2 / 3; }
+            .sub-item { grid-template-columns: 1fr; }
+        }
+
+        /* Collapsible hint */
+        details.hint-box {
+            margin-top: 8px;
+            padding: 10px 14px;
+            background: rgba(255,255,255,.02);
+            border: 1px dashed var(--border-strong);
+            border-radius: var(--radius-sm);
+        }
+        details.hint-box summary {
+            cursor: pointer;
+            color: var(--text-muted);
+            font-size: .84rem;
+            font-weight: 500;
+            padding: 2px 0;
+        }
+        details.hint-box summary:hover { color: var(--text); }
+        details.hint-box[open] summary { margin-bottom: 8px; }
+        details.hint-box p { margin: 0; color: var(--text-muted); font-size: .82rem; }
+
+        /* Responsive */
+        @media (max-width: 860px) {
+            .app-shell { padding: 18px 16px 60px; }
+            .manual-panel { grid-template-columns: 1fr; }
+            .topbar { padding: 12px 14px; }
+            .card { padding: 20px 18px; }
+            .segment-buttons button { max-width: 100%; }
+            .col-clip, .col-episode { min-width: 180px; }
+            .col-action { min-width: 180px; }
+        }
+        @media (max-width: 520px) {
+            .topbar { flex-direction: column; align-items: stretch; }
+            .top-actions { justify-content: flex-start; }
+            .account-card { padding: 16px; }
+        }
     </style>
 </head>
 <body>
-    <header>
-        <div>
-            <h1>Podcast Clips admin</h1>
-            <small>Account connections and episode links</small>
-        </div>
-        <div class="top-actions">
-            <a href="{{ url_for('index') }}">View clips</a>
-            <form method="post" action="{{ url_for('admin_logout') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <button class="secondary" type="submit">Sign out</button>
-            </form>
-        </div>
-    </header>
-    <main>
-        {% for category, message in get_flashed_messages(with_categories=true) %}
-            <div class="notice {{ category }}" role="status">{{ message }}</div>
-        {% endfor %}
-
-        <section class="card">
-            <h2>Connect upload accounts</h2>
-            <div class="accounts">
-                <div class="account">
-                    <h3>YouTube</h3>
-                    <span class="status {{ 'connected' if youtube_connected else '' }}">{{ 'Token saved' if youtube_connected else 'Not connected' }}</span>
-                    <p>Authorize the channel used for Shorts uploads.</p>
-                    {% if youtube_ready %}
-                        <a class="button" href="{{ url_for('youtube_auth') }}">{{ 'Reconnect YouTube' if youtube_connected else 'Connect YouTube' }}</a>
-                    {% else %}
-                        <small>Set YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET first.</small>
-                    {% endif %}
+    <div class="app-shell">
+        {% macro pagination_bar(pager, position) -%}
+            {% if pager and pager.total > 0 %}
+            <nav class="pagination {{ position }}" aria-label="Pagination">
+                <div class="pagination-summary">
+                    Menampilkan
+                    <strong>{{ pager.start_idx }}</strong>–<strong>{{ pager.end_idx }}</strong>
+                    dari <strong>{{ pager.total }}</strong>
                 </div>
-                <div class="account">
-                    <h3>TikTok</h3>
-                    <span class="status {{ 'connected' if tiktok_connected else '' }}">{{ 'Token saved' if tiktok_connected else 'Not connected' }}</span>
-                    <p>Authorize the account used for inbox uploads.</p>
-                    {% if tiktok_ready %}
-                        <a class="button" href="{{ url_for('tiktok_auth') }}">{{ 'Reconnect TikTok' if tiktok_connected else 'Connect TikTok' }}</a>
-                    {% else %}
-                        <small>Set TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET first.</small>
-                    {% endif %}
+                <div class="pagination-actions">
+                    <div class="per-page-form">
+                        <form method="get" action="{{ url_for(pager.endpoint) }}">
+                            <input type="hidden" name="{{ pager.page_key }}" value="1">
+                            <input type="hidden" name="{{ pager.other_page_key }}" value="{{ pager.other_page_val if pager.other_page_val and pager.other_page_val != 1 else '' }}">
+                            <input type="hidden" name="{{ pager.other_per_key }}" value="{{ pager.other_per_val if pager.other_per_val and pager.other_per_val != 10 else '' }}">
+                            <label for="per-{{ pager.per_key }}">Baris:</label>
+                            <select id="per-{{ pager.per_key }}" name="{{ pager.per_key }}" onchange="this.form.submit()">
+                                {% for n in pager.allowed_per_page %}
+                                <option value="{{ n }}" {% if pager.per_page == n %}selected{% endif %}>{{ n }}</option>
+                                {% endfor %}
+                            </select>
+                            <noscript><button class="btn btn-ghost" type="submit">Terapkan</button></noscript>
+                        </form>
+                    </div>
+                    <a class="page-btn" {% if pager.first_url %}href="{{ pager.first_url }}"{% else %}disabled aria-disabled="true"{% endif %} title="Halaman pertama">«</a>
+                    <a class="page-btn" {% if pager.prev_url %}href="{{ pager.prev_url }}"{% else %}disabled aria-disabled="true"{% endif %} title="Sebelumnya">‹</a>
+                    {% for p in pager.pages %}
+                        {% if p is none %}
+                        <span class="page-ellipsis" aria-hidden="true">···</span>
+                        {% else %}
+                        <a class="page-btn{% if p == pager.page %} current{% endif %}"
+                           href="{{ url_for(pager.endpoint, **{pager.page_key: p if p != 1 else none, pager.per_key: pager.per_page if pager.per_page != 10 else none, pager.other_page_key: pager.other_page_val if pager.other_page_val and pager.other_page_val != 1 else none, pager.other_per_key: pager.other_per_val if pager.other_per_val and pager.other_per_val != 10 else none}) }}">
+                            {{ p }}
+                        </a>
+                        {% endif %}
+                    {% endfor %}
+                    <a class="page-btn" {% if pager.next_url %}href="{{ pager.next_url }}"{% else %}disabled aria-disabled="true"{% endif %} title="Berikutnya">›</a>
+                    <a class="page-btn" {% if pager.last_url %}href="{{ pager.last_url }}"{% else %}disabled aria-disabled="true"{% endif %} title="Halaman terakhir">»</a>
+                </div>
+            </nav>
+            {% endif %}
+        {%- endmacro %}
+
+        <header class="topbar">
+            <div class="brand">
+                <div class="brand-logo" aria-hidden="true"></div>
+                <div class="brand-title">
+                    <h1>Podcast Clips Admin</h1>
+                    <small>Kelola akun, antrian episode, dan upload klip</small>
                 </div>
             </div>
-        </section>
+            <div class="top-actions">
+                <a class="ghost-link" href="{{ url_for('index') }}">← Lihat galeri</a>
+                <form method="post" action="{{ url_for('admin_logout') }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                    <button class="btn btn-secondary" type="submit">Keluar</button>
+                </form>
+            </div>
+        </header>
 
-        <section class="card">
-            <h2>YouTube clips</h2>
-            <p>Upload satu per satu setelah review. Judul dan caption diambil dari gallery.</p>
-            <details><summary style="cursor:pointer;color:#bbb;margin-bottom:10px"><small>Manual studio upload — when API quota is expired: (1) copy metadata, (2) drag-drop MP4 di YouTube Studio, (3) tempel video ID atau URL di form bawah lalu Simpan.</small></summary></details>
-            {% if deployed_clips %}
-                <div class="table-wrap"><table>
-                    <thead><tr><th>Episode</th><th>Clip</th><th>Status</th><th>Action</th></tr></thead>
-                    <tbody>
-                        {% for clip in deployed_clips %}
-                            <tr>
-                                <td>{{ clip.podcast }} / {{ clip.episode }}</td>
-                                <td>{{ clip.clip_num }}. {{ clip.title }}</td>
-                                <td>
-                                    {% if clip.upload %}
-                                        {% if clip.upload.status == 'manual' %}Manual (YouTube Studio){% else %}{{ clip.upload.status }}{% endif %}
-                                        {% if clip.upload.video_id %}
-                                            <br><small><a href="https://youtu.be/{{ clip.upload.video_id }}" target="_blank" rel="noopener noreferrer">{{ clip.upload.video_id }}</a></small>
-                                        {% endif %}
-                                        {% if clip.upload.error and clip.upload.status != 'manual' %}<br><small style="color:#ff9999">{{ clip.upload.error[:160] }}</small>{% endif %}
-                                    {% else %}Belum di-upload{% endif %}
-                                </td>
-                                <td>
-                                    {% if not clip.upload or (clip.upload.status not in ('uploaded', 'manual')) %}
-                                        <form method="post" action="{{ url_for('admin_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}" style="display:inline">
-                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                            <button type="submit">Upload API</button>
-                                        </form>
-                                        <button type="button" class="secondary"
-                                                data-toggle-details="#manual-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
-                                                style="margin-top:6px">Manual Studio…</button>
-                                    {% else %}
-                                        <small>Selesai — {{ 'manual' if clip.upload.status == 'manual' else 'API' }}</small>
-                                    {% endif %}
-                                </td>
-                            </tr>
-                            {% if clip.manual %}
-                                <tr id="manual-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}" hidden style="background:#141414">
-                                    <td colspan="4" style="padding:14px 18px">
-                                        <div style="display:grid;grid-template-columns: 1.2fr 1fr; gap:18px;align-items:start">
-                                            <div>
-                                                <p style="margin:0 0 10px">
-                                                    <strong>File video:</strong> {{ clip.manual.video_filename }}
-                                                    ({{ clip.manual.file_size_mb }} MB)
-                                                    <br>
-                                                    <small>{{ clip.manual.video_path }}</small>
-                                                </p>
-                                                {% if clip.manual.sha256 %}
-                                                <p style="margin:6px 0 12px">
-                                                    <strong>SHA-256:</strong>
-                                                    <code id="sha-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
-                                                          style="background:#060606;padding:4px 6px;border-radius:6px;display:inline-block;max-width:100%;overflow-wrap:anywhere;font-size:.8rem">{{ clip.manual.sha256 }}</code>
-                                                    <button class="secondary" type="button" style="font-size:.8rem;padding:5px 10px;margin-left:6px"
-                                                            data-copy="#sha-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy</button>
-                                                </p>
+        <main>
+            {% set flashes = get_flashed_messages(with_categories=true) %}
+            {% if flashes %}
+            <div class="notice-stack">
+                {% for category, message in flashes %}
+                    {% set cls = 'success' if category == 'success' else ('error' if category == 'error' else 'info') %}
+                    <div class="notice {{ cls }}" role="status">{{ message }}</div>
+                {% endfor %}
+            </div>
+            {% endif %}
+
+            <!-- ============ Accounts ============ -->
+            <section class="card">
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div>
+                            <h2>Koneksi akun upload</h2>
+                            <p class="subtitle">Hubungkan channel YouTube dan akun TikTok untuk mengunggah langsung dari panel admin.</p>
+                        </div>
+                        <span class="card-badge">OAuth</span>
+                    </div>
+
+                    <div class="accounts-grid">
+                        <div class="account-card" data-provider="youtube">
+                            <div class="account-head">
+                                <div class="provider">
+                                    <div class="provider-name">
+                                        <span class="provider-icon youtube">YT</span>
+                                        YouTube
+                                    </div>
+                                    <p class="provider-desc">Upload ke channel YouTube Shorts. Perlu client ID + secret OAuth.</p>
+                                </div>
+                                {% if youtube_connected %}
+                                    <span class="chip chip-success">Terhubung</span>
+                                {% else %}
+                                    <span class="chip chip-neutral">Belum terhubung</span>
+                                {% endif %}
+                            </div>
+                            <div class="account-foot">
+                                {% if youtube_ready %}
+                                    <a class="btn {{ 'btn-secondary' if youtube_connected else 'btn-primary' }}" href="{{ url_for('youtube_auth') }}">
+                                        {{ 'Hubungkan ulang YouTube' if youtube_connected else 'Hubungkan YouTube' }}
+                                    </a>
+                                {% else %}
+                                    <small>⚠ Set YOUTUBE_CLIENT_ID dan YOUTUBE_CLIENT_SECRET di env sebelum bisa hubungkan.</small>
+                                {% endif %}
+                            </div>
+                        </div>
+
+                        <div class="account-card" data-provider="tiktok">
+                            <div class="account-head">
+                                <div class="provider">
+                                    <div class="provider-name">
+                                        <span class="provider-icon tiktok">TT</span>
+                                        TikTok
+                                    </div>
+                                    <p class="provider-desc">Upload ke TikTok Inbox. Perlu client key + secret OAuth.</p>
+                                </div>
+                                {% if tiktok_connected %}
+                                    <span class="chip chip-success">Terhubung</span>
+                                {% else %}
+                                    <span class="chip chip-neutral">Belum terhubung</span>
+                                {% endif %}
+                            </div>
+                            <div class="account-foot">
+                                {% if tiktok_ready %}
+                                    <a class="btn {{ 'btn-secondary' if tiktok_connected else 'btn-indigo' }}" href="{{ url_for('tiktok_auth') }}">
+                                        {{ 'Hubungkan ulang TikTok' if tiktok_connected else 'Hubungkan TikTok' }}
+                                    </a>
+                                {% else %}
+                                    <small>⚠ Set TIKTOK_CLIENT_KEY dan TIKTOK_CLIENT_SECRET di env sebelum bisa hubungkan.</small>
+                                {% endif %}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ YouTube Clips ============ -->
+            <section class="card">
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div>
+                            <h2>Klip YouTube siap upload</h2>
+                            <p class="subtitle">Review satu per satu. Upload via API jika quota masih ada, atau lewat YouTube Studio kalau quota habis untuk hari itu.</p>
+                        </div>
+                        <span class="card-badge">{{ clips_pager.total if clips_pager else (deployed_clips|length if deployed_clips else 0) }} klip</span>
+                    </div>
+
+                    <details class="hint-box">
+                        <summary>💡 Cara upload manual via YouTube Studio (ketika API quota habis)</summary>
+                        <p>Copy judul + deskripsi + tags dari panel, drag-drop MP4 ke YouTube Studio, kembali ke admin dan tempel 11-karakter video ID (atau URL penuh) ke form, lalu Simpan. Sistem akan menyimpan record manual di SQLite + menulis file <code class="monospaced">.metadata.json</code> pendamping di samping MP4 sebagai bukti.</p>
+                    </details>
+
+                    {% if deployed_clips %}
+                    {{ pagination_bar(clips_pager, "top") }}
+                    <div class="table-wrap">
+                        <table>
+                            <thead>
+                                <tr>
+                                    <th class="col-episode">Episode</th>
+                                    <th class="col-clip">Klip</th>
+                                    <th class="col-status">Status</th>
+                                    <th class="col-action">Aksi</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for clip in deployed_clips %}
+                                <tr>
+                                    <td>
+                                        <strong style="color:var(--text)">{{ clip.podcast }}</strong>
+                                        <div class="clip-meta">{{ clip.episode }}</div>
+                                    </td>
+                                    <td>
+                                        <span class="clip-title">{{ clip.clip_num }}. {{ clip.title }}</span>
+                                        <span class="clip-meta">{{ clip.manual.size_mb if clip.manual else '?' }} MB · durasi {{ clip.manual.start if clip.manual else '?' }}s</span>
+                                    </td>
+                                    <td>
+                                        <div class="status-stack">
+                                            {% if clip.upload %}
+                                                {% set s = clip.upload.status %}
+                                                {% if s == 'uploaded' %}
+                                                    <span class="chip chip-success">Terkirim (API)</span>
+                                                {% elif s == 'manual' %}
+                                                    <span class="chip chip-indigo">Manual (Studio)</span>
+                                                {% elif s == 'failed' or s == 'error' %}
+                                                    <span class="chip chip-danger">Gagal</span>
+                                                {% elif s == 'queued' %}
+                                                    <span class="chip chip-warning">Dalam antrean</span>
+                                                {% else %}
+                                                    <span class="chip chip-neutral">{{ s }}</span>
                                                 {% endif %}
-                                                <p style="margin:4px 0"><strong>Judul (100 chars):</strong></p>
-                                                <textarea rows="2" readonly id="title-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
-                                                          style="resize:vertical;min-height:3.5em;width:100%;background:#0c0c0c;color:#eee;border:1px solid #444;border-radius:6px;padding:8px">{{ clip.manual.title }}</textarea>
-                                                <p style="margin:12px 0 4px"><strong>Deskripsi (5000 chars):</strong></p>
-                                                <textarea rows="6" readonly id="desc-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
-                                                          style="resize:vertical;width:100%;background:#0c0c0c;color:#eee;border:1px solid #444;border-radius:6px;padding:8px">{{ clip.manual.description }}</textarea>
-                                                <p style="margin:12px 0 4px"><strong>Tags (comma separated, 500 chars):</strong></p>
-                                                <textarea rows="2" readonly id="tags-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
-                                                          style="resize:none;width:100%;background:#0c0c0c;color:#eee;border:1px solid #444;border-radius:6px;padding:8px">{{ clip.manual.tags_csv }}</textarea>
-                                                <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-                                                    <button class="secondary" type="button" data-copy="#title-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy judul</button>
-                                                    <button class="secondary" type="button" data-copy="#desc-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy deskripsi</button>
-                                                    <button class="secondary" type="button" data-copy="#tags-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy tags</button>
-                                                    <a class="button secondary" target="_blank" rel="noopener noreferrer"
-                                                       href="{{ clip.manual.studio_upload_url }}">Buka YouTube Studio ↗</a>
-                                                </div>
-                                                <p style="margin:14px 0 6px;color:#aaa"><small>Setelah Anda unggah MP4 di Studio dan video sudah punya ID, tempel 11-karakter ID <em>atau</em> URL penuh YouTube di bawah lalu klik Simpan. Catatan status akan diperbarui otomatis.</small></p>
-                                                <form method="post" action="{{ url_for('admin_manual_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}"
-                                                      style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap">
+                                                {% if clip.upload.video_id %}
+                                                    <a class="status-id-link" href="https://youtu.be/{{ clip.upload.video_id }}" target="_blank" rel="noopener noreferrer">
+                                                        📎 {{ clip.upload.video_id }} ↗
+                                                    </a>
+                                                {% endif %}
+                                                {% if clip.upload.error and s != 'manual' %}
+                                                    <span class="status-error">
+                                                        ⚠ {{ clip.upload.error[:180] }}{% if clip.upload.error|length > 180 %}…{% endif %}
+                                                    </span>
+                                                {% endif %}
+                                            {% else %}
+                                                <span class="chip chip-neutral">Belum di-upload</span>
+                                            {% endif %}
+                                        </div>
+                                    </td>
+                                    <td>
+                                        {% if not clip.upload or (clip.upload.status not in ('uploaded', 'manual')) %}
+                                            <div class="action-group">
+                                                <form method="post" action="{{ url_for('admin_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}">
                                                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                                    <div style="flex:1;min-width:280px">
-                                                        <label for="vid-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">YouTube video ID <em>atau</em> URL lengkap</label>
-                                                        <input id="vid-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
-                                                               name="video_id" type="text" required
-                                                               autocomplete="off" maxlength="200"
-                                                               placeholder="cth: dQw4w9WgXcQ atau https://youtu.be/dQw4w9WgXcQ atau https://www.youtube.com/watch?v=dQw4w9WgXcQ">
-                                                    </div>
-                                                    <button type="submit">Simpan manual upload</button>
+                                                    <button class="btn btn-primary" type="submit">⬆ Upload API</button>
                                                 </form>
+                                                <button class="btn btn-secondary" type="button"
+                                                        data-toggle-details="#manual-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">
+                                                    🎬 Manual Studio…
+                                                </button>
                                             </div>
-                                            <div>
-                                                <p style="margin:0 0 10px"><strong>Langkah-langkah Studio:</strong></p>
-                                                <ol style="padding-left:18px;margin:0;color:#ddd">
-                                                    <li>Klik <strong>Buka YouTube Studio</strong>, lalu <em>Create &rarr; Upload videos</em>.</li>
-                                                    <li>Drag-drop file MP4 dari path di atas (folder <code>/app/static/clips/{{ clip.podcast }}/{{ clip.episode }}/</code>).</li>
-                                                    <li>Copy judul, deskripsi, tags, tempel masing-masing di tab Details Studio.</li>
-                                                    <li>Visibility: <strong>Public</strong>, Save → salin video ID.</li>
-                                                    <li>Balik ke halaman admin ini, tempel ID atau URL di form kiri → <strong>Simpan manual upload</strong>.</li>
-                                                    <li>Sistem akan menulis <code>{{ clip.manual.video_filename }}.metadata.json</code> di samping file MP4 sebagai bukti record.</li>
-                                                </ol>
+                                        {% else %}
+                                            <small style="color:var(--text-muted)">
+                                                Selesai via {{ 'Studio' if clip.upload.status == 'manual' else 'API' }}
+                                            </small>
+                                        {% endif %}
+                                    </td>
+                                </tr>
+                                {% if clip.manual %}
+                                <tr class="manual-row" id="manual-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}" hidden>
+                                    <td colspan="4">
+                                        <div class="manual-panel">
+                                            <div class="manual-col">
+                                                <div class="panel-subcard">
+                                                    <h4>Detail file & integritas</h4>
+                                                    <div class="info-line">
+                                                        <span class="info-label">File MP4</span>
+                                                        <span class="info-value">{{ clip.manual.video_filename }} <small style="color:var(--text-dim)">({{ clip.manual.file_size_mb }} MB)</small></span>
+                                                    </div>
+                                                    <div class="info-line">
+                                                        <span class="info-label">Path</span>
+                                                        <span class="info-value"><small>{{ clip.manual.video_path }}</small></span>
+                                                    </div>
+                                                    {% if clip.manual.sha256 %}
+                                                    <div class="info-line" style="align-items:flex-start">
+                                                        <span class="info-label">SHA-256</span>
+                                                        <span class="info-value" style="flex:1;min-width:0">
+                                                            <div class="hash-row">
+                                                                <div class="hash-box" id="sha-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">{{ clip.manual.sha256 }}</div>
+                                                                <button class="btn btn-ghost" type="button" data-copy="#sha-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Copy</button>
+                                                            </div>
+                                                        </span>
+                                                    </div>
+                                                    {% endif %}
+                                                    <div class="info-line">
+                                                        <span class="info-label">Timestamps</span>
+                                                        <span class="info-value">{{ clip.manual.start }} – {{ clip.manual.end }} detik</span>
+                                                    </div>
+                                                </div>
+
+                                                <div class="panel-subcard">
+                                                    <h4>Metadata untuk YouTube Studio</h4>
+                                                    <div style="margin-top:4px">
+                                                        <label for="title-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Judul <span class="hint">(maks. 100 karakter)</span></label>
+                                                        <textarea rows="2" id="title-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}" readonly>{{ clip.manual.title }}</textarea>
+                                                    </div>
+                                                    <div style="margin-top:14px">
+                                                        <label for="desc-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Deskripsi <span class="hint">(maks. 5.000 karakter)</span></label>
+                                                        <textarea rows="7" id="desc-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}" readonly>{{ clip.manual.description }}</textarea>
+                                                    </div>
+                                                    <div style="margin-top:14px">
+                                                        <label for="tags-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">Tags <span class="hint">(comma separated, maks. 500 karakter)</span></label>
+                                                        <textarea rows="2" id="tags-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}" readonly>{{ clip.manual.tags_csv }}</textarea>
+                                                    </div>
+                                                    <div class="btn-row" style="margin-top:14px">
+                                                        <button class="btn btn-ghost" type="button" data-copy="#title-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">📋 Copy judul</button>
+                                                        <button class="btn btn-ghost" type="button" data-copy="#desc-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">📋 Copy deskripsi</button>
+                                                        <button class="btn btn-ghost" type="button" data-copy="#tags-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">📋 Copy tags</button>
+                                                        <a class="btn btn-indigo" target="_blank" rel="noopener noreferrer" href="{{ clip.manual.studio_upload_url }}">
+                                                            🎬 Buka YouTube Studio ↗
+                                                        </a>
+                                                    </div>
+                                                </div>
+
+                                                <div class="panel-subcard" style="border-color: rgba(99,102,241,.3); background: rgba(99,102,241,.06);">
+                                                    <h4 style="color:#c7d2fe">Simpan record ke database</h4>
+                                                    <p class="subtitle" style="margin:0 0 12px;font-size:.84rem">
+                                                        Setelah selesai upload di Studio, tempel <strong>11-karakter video ID</strong> atau URL penuh YouTube di bawah. Sistem akan mencatat reviewer, waktu, dan menulis <code class="monospaced">.metadata.json</code> pendamping di samping MP4.
+                                                    </p>
+                                                    <form method="post" action="{{ url_for('admin_manual_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}">
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                                        <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap">
+                                                            <div style="flex:1;min-width:280px">
+                                                                <label for="vid-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">YouTube video ID <em>atau</em> URL lengkap</label>
+                                                                <input id="vid-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}"
+                                                                       name="video_id" type="text" required
+                                                                       autocomplete="off" maxlength="200"
+                                                                       placeholder="Contoh: dQw4w9WgXcQ • youtu.be/dQw4w9WgXcQ • youtube.com/watch?v=dQw4w9WgXcQ">
+                                                                <span class="field-hint">Contoh format yang diterima: ID 11 karakter, short URL youtu.be, atau URL panjang www.youtube.com/watch?v=</span>
+                                                            </div>
+                                                            <button class="btn btn-primary" type="submit">💾 Simpan manual upload</button>
+                                                        </div>
+                                                    </form>
+                                                </div>
+                                            </div>
+                                            <div class="manual-col">
+                                                <div class="panel-subcard" style="background: linear-gradient(180deg, rgba(245,158,11,.06), rgba(0,0,0,.2));">
+                                                    <h4 style="color:#ffcc66">📌 Panduan Studio 6 langkah</h4>
+                                                    <ol class="studio-steps">
+                                                        <li>Klik <strong>Buka YouTube Studio ↗</strong> di panel kiri, lalu pilih menu <strong>Create → Upload videos</strong> (ikon kamera +).</li>
+                                                        <li>Drag-drop file MP4 dari path: <code>/app/static/clips/{{ clip.podcast }}/{{ clip.episode }}/{{ clip.manual.video_filename }}</code></li>
+                                                        <li>Panel kiri → <strong>Copy judul</strong>, <strong>Copy deskripsi</strong>, <strong>Copy tags</strong>. Tempel masing-masing ke tab Details di Studio. Pastikan <strong>#Shorts</strong> ada di akhir judul.</li>
+                                                        <li>Thumbnail bisa pakai auto atau upload gambar pilihan. Visibility → set ke <strong>Public</strong>, klik <strong>Publish</strong>. Tunggu sampai videonya punya URL ID (11 karakter).</li>
+                                                        <li>Balik ke halaman admin ini, copy-paste ID video <em>atau</em> URL penuh ke form "Simpan record ke database" di atas → klik <strong>Simpan manual upload</strong>.</li>
+                                                        <li>Sistem otomatis menulis file <code>{{ clip.manual.video_filename }}.metadata.json</code> pendamping di samping MP4 sebagai arsip record.</li>
+                                                    </ol>
+                                                </div>
+                                                <div class="panel-subcard">
+                                                    <h4>Catatan upload API vs Manual</h4>
+                                                    <div class="info-line">
+                                                        <span class="info-label">Quota harian</span>
+                                                        <span class="info-value">~10–20 upload/hari per channel. Kalau limitnya kena, gunakan Manual Studio; quota reset besok pagi.</span>
+                                                    </div>
+                                                    <div class="info-line">
+                                                        <span class="info-label">Duplicate check</span>
+                                                        <span class="info-value">Sebelum meng-upload via API, admin panel cek database — jika sudah tercatat <code>uploaded</code> atau <code>manual</code>, tombol ganti jadi "Selesai".</span>
+                                                    </div>
+                                                    <div class="info-line">
+                                                        <span class="info-label">Re-upload</span>
+                                                        <span class="info-value">Hapus record di <code>app/data/admin.sqlite3</code> tabel <code>youtube_uploads</code> kalau ingin bikin record ulang.</span>
+                                                    </div>
+                                                </div>
                                             </div>
                                         </div>
                                     </td>
                                 </tr>
-                            {% endif %}
+                                {% endif %}
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                    {{ pagination_bar(clips_pager, "bottom") }}
+                    {% else %}
+                        <p class="subtitle">Belum ada klip di direktori <code>app/static/clips/</code>. Jalankan pipeline dulu untuk menghasilkan klip.</p>
+                    {% endif %}
+                </div>
+            </section>
+
+            <!-- ============ Compilation ============ -->
+            <section class="card">
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div>
+                            <h2>Kompilasi TOP 5</h2>
+                            <p class="subtitle">Pilih episode, usulkan momen secara otomatis atau susun sendiri, build preview lokal sebelum upload.</p>
+                        </div>
+                        <span class="card-badge">Build lokal</span>
+                    </div>
+
+                    <form id="compilation-form">
+                        <div class="form-grid two-col">
+                            <div>
+                                <label for="compilation-episode">Episode</label>
+                                <select id="compilation-episode" required>
+                                    <option value="">Pilih episode</option>
+                                    {% for episode in compilation_episodes %}<option value="{{ episode.id }}">{{ episode.title }} ({{ episode.id }})</option>{% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label for="compilation-subheader">Topik kompilasi <span class="hint">(ditampilkan di atas video)</span></label>
+                                <input id="compilation-subheader" placeholder="Contoh: 5 Momen Kocak Debat" maxlength="120">
+                            </div>
+                            <div style="grid-column: 1 / -1;">
+                                <label for="compilation-header">Header besar <span class="hint">(judul TOP-N, ditampilkan dengan font besar)</span></label>
+                                <input id="compilation-header" value="TOP 5 MOMEN" maxlength="80" required>
+                            </div>
+                        </div>
+                        <div class="btn-row" style="margin:16px 0 6px;gap:8px;align-items:center;flex-wrap:wrap">
+                            <button id="compilation-suggest" class="btn btn-secondary" type="button">✨ Usul otomatis (review dulu sebelum pilih)</button>
+                            <button id="compilation-autofill5" class="btn btn-ghost" type="button" title="Isi 5 teratas otomatis dari usulan (tanpa review)">⚡ Isi 5 langsung (opsi lawas)</button>
+                        </div>
+                        <div>
+                            <span id="compilation-suggest-status" class="field-hint status-text" role="status" aria-live="polite">Pilih episode → klik Usul otomatis untuk menampilkan kandidat, klik kandidat untuk mengisi slot momen 1–5.</span>
+                        </div>
+                        <div id="compilation-source-wrap" class="compilation-video-wrap" style="margin:18px 0 10px" hidden>
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+                                <h4 style="margin:0;font-size:.9rem;color:var(--text-muted)">📼 Video sumber episode (untuk bantu review momen &amp; ambil timestamp)</h4>
+                                <a id="compilation-source-link" class="btn btn-secondary btn-ghost" target="_blank" rel="noopener noreferrer">⬇ Buka sumber di tab baru</a>
+                            </div>
+                            <video id="compilation-source" controls preload="metadata" playsinline crossorigin="anonymous" style="aspect-ratio:16/9;width:100%;max-height:520px;object-fit:contain;background:#000;border-radius:16px;border:1px solid var(--border-soft)"></video>
+                        </div>
+                        <div id="compilation-suggestions" class="segment-buttons" hidden></div>
+
+                        <div id="compilation-items" class="compilation-grid"></div>
+
+                        <div style="margin-top:22px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+                            <button type="submit" class="btn btn-primary">🛠 Build preview</button>
+                            <span id="compilation-status" class="field-hint status-text" role="status" aria-live="polite"></span>
+                        </div>
+                    </form>
+
+                    <div class="compilation-video-wrap" id="compilation-preview-wrap" hidden>
+                        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
+                            <h4 style="margin:0;font-size:.9rem;color:var(--text-muted)">🎬 Preview kompilasi</h4>
+                            <a id="compilation-preview-link" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">⬇ Buka di tab baru</a>
+                        </div>
+                        <video id="compilation-preview" controls preload="metadata" playsinline></video>
+                    </div>
+                </div>
+            </section>
+
+            <!-- ============ Add Episode ============ -->
+            <section class="card">
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div>
+                            <h2>Tambahkan episode YouTube</h2>
+                            <p class="subtitle">Tempel link video. Hasil proses tetap lokal — tidak otomatis dipublikasikan ke mana pun.</p>
+                        </div>
+                        <span class="card-badge">Antrean</span>
+                    </div>
+
+                    <form method="post" action="{{ url_for('admin_add_youtube_link') }}">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                        <div class="form-grid two-col">
+                            <div style="grid-column: 1 / -1;">
+                                <label for="url">Link YouTube</label>
+                                <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
+                                <span id="youtube-lookup-status" class="field-hint status-text" role="status" aria-live="polite">Tempel link untuk otomatis mengisi judul dan mendeteksi nama podcast.</span>
+                            </div>
+                            <div>
+                                <label for="podcast">Podcast <span class="hint">(auto-terisi kalau link dikenali)</span></label>
+                                <select id="podcast" name="podcast" required>
+                                    <option value="" selected disabled>Pilih podcast</option>
+                                    {% for podcast in podcasts %}<option value="{{ podcast }}">{{ podcast }}</option>{% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label for="title">Judul episode <span class="hint">(opsional, auto-terisi)</span></label>
+                                <input id="title" name="title" type="text" maxlength="200" placeholder="Tulis judul jika ingin override">
+                            </div>
+                        </div>
+                        <div class="btn-row" style="margin-top:20px">
+                            <button type="submit" name="action" value="process" class="btn btn-primary">🚀 Proses sekarang</button>
+                            <button class="btn btn-secondary" type="submit" name="action" value="queue">➕ Tambahkan ke antrean</button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- ============ Recent Submissions ============ -->
+            <section class="card">
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div>
+                            <h2>Pengajuan terbaru</h2>
+                            <p class="subtitle">Progress tiap episode (dikelompok per sumber YouTube; refresh otomatis jika ada yang sedang berjalan).</p>
+                        </div>
+                        <span class="card-badge">
+                            {% if submissions_pager %}
+                                {{ submissions_pager.total }} sumber · {{ submissions_pager.total_items_flat if submissions_pager.total_items_flat is defined else 0 }} item
+                            {% elif submissions %}
+                                {{ submissions|length }}
+                            {% else %}0 sumber{% endif %}
+                        </span>
+                    </div>
+
+                    {% if submissions %}
+                    <div class="submission-groups">
+                        {% for group in submissions %}
+                        <article class="sub-group"
+                                 data-video-id="{{ group.video_id }}"
+                                 data-group-status="{{ group.worst_status }}"
+                                 aria-expanded="true">
+                            <header class="sub-group-head">
+                                <a class="sub-group-thumb" href="{{ group.video_url }}" target="_blank" rel="noopener noreferrer"
+                                   title="Buka sumber YouTube di tab baru">
+                                    <img loading="lazy" referrerpolicy="no-referrer"
+                                         src="https://i.ytimg.com/vi/{{ group.video_id }}/hqdefault.jpg"
+                                         onerror="this.onerror=null;this.src='https://i.ytimg.com/vi/{{ group.video_id }}/mqdefault.jpg'"
+                                         alt="Thumbnail YouTube {{ group.video_id }}"
+                                         width="220" height="124">
+                                </a>
+                                <div class="sub-group-meta">
+                                    <span class="sg-podcast">{{ group.podcast or 'podcast' }}</span>
+                                    <span class="sg-title">{{ group.title }}</span>
+                                    <div class="sg-times">
+                                        {% if group.first_created %}
+                                            <span>⏱️ Masuk: <strong>{{ group.first_created[:16].replace('T',' ') }} UTC</strong></span>
+                                        {% endif %}
+                                        {% if group.last_created and group.last_created != group.first_created %}
+                                            <span>Terakhir: {{ group.last_created[:16].replace('T',' ') }} UTC</span>
+                                        {% endif %}
+                                        <span>Total item: <strong>{{ (group['items'] if group['items'] is defined else group.submissions)|length }}</strong></span>
+                                    </div>
+                                    <a class="sg-link" href="{{ group.video_url }}" target="_blank" rel="noopener noreferrer">
+                                        {{ group.video_id }} ↗
+                                    </a>
+                                </div>
+
+                                <div class="sg-progress-wrap">
+                                    <div class="sg-stage">
+                                        <span>{{ group.worst_progress.stage or group.group_status_label }}</span>
+                                        <small>{{ group.max_percent }}%</small>
+                                    </div>
+                                    <progress value="{{ group.max_percent }}" max="100"
+                                              aria-label="Progress {{ group.video_id }}">{{ group.max_percent }}%</progress>
+                                    <small class="job-label" style="margin:2px 0 0;color:var(--text-muted)">
+                                        {{ group.worst_progress.label or group.group_status_label }}
+                                    </small>
+                                </div>
+
+                                <div class="sub-group-status">
+                                    <div class="sub-group-counters">
+                                        {% set first_counter = namespace(found=false) %}
+                                        {% for c in group.counters %}
+                                            {% if c and not first_counter.found %}{% set first_counter.found = true %}{% endif %}
+                                            <span class="mini-chip">{{ c }}</span>
+                                        {% endfor %}
+                                        {% if not first_counter.found %}
+                                            <span class="mini-chip">{{ (group['items'] if group['items'] is defined else group.submissions)|length }} item</span>
+                                        {% endif %}
+                                    </div>
+                                    <span class="chip {{ group.group_status_class }}">{{ group.group_status_label }}</span>
+                                    <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+                                        <button type="button" class="btn btn-ghost sg-toggle" data-group-toggle-source-video
+                                                aria-expanded="false" aria-controls="src-wrap-{{ group.video_id }}">
+                                            ▶ Putar sumber
+                                        </button>
+                                        <button type="button" class="btn btn-indigo sg-toggle" data-group-toggle-items
+                                                aria-expanded="true" aria-controls="items-wrap-{{ group.video_id }}">
+                                            ⋮ Detail
+                                        </button>
+                                    </div>
+                                </div>
+                            </header>
+
+                            <div class="sg-source-video-wrap" id="src-wrap-{{ group.video_id }}" aria-expanded="false">
+                                <iframe
+                                    loading="lazy"
+                                    referrerpolicy="no-referrer"
+                                    src=""
+                                    title="YouTube sumber {{ group.video_id }}"
+                                    frameborder="0"
+                                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                                    allowfullscreen></iframe>
+                            </div>
+
+                            <div class="sub-group-items" id="items-wrap-{{ group.video_id }}" aria-hidden="false">
+                                {% for item in (group['items'] if group['items'] is defined else group.submissions) %}
+                                <div class="sub-item"
+                                     data-video-id="{{ item.video_id }}"
+                                     data-submission-id="{{ item.id }}">
+                                    <div class="sub-item-meta">
+                                        <span class="si-id">submission #{{ item.id }}</span>
+                                        <span class="si-title">
+                                            {% if item.status == 'completed' %}<i class="status-ok">✓</i>
+                                            {% elif item.status == 'failed' %}<i class="status-fail">✗</i>
+                                            {% elif item.status == 'in_progress' %}<i class="status-warn">⟳</i>
+                                            {% else %}<i class="status-pending">⏳</i>{% endif %}
+                                            {{ item.title or group.title or 'Tanpa judul' }}
+                                        </span>
+                                        <span class="si-when">{{ item.created_at[:16].replace('T',' ') }} UTC · status: {{ item.status }}</span>
+                                    </div>
+                                    <div class="job-progress job-cell">
+                                        <span class="job-stage">{{ item.progress.stage }}</span>
+                                        <span class="job-label">{{ item.progress.label }}</span>
+                                        <progress max="100" value="{{ item.progress.percent }}"
+                                                  aria-label="Progress {{ item.progress.stage }}">{{ item.progress.percent }}%</progress>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div>
+                        </article>
                         {% endfor %}
-                    </tbody>
-                </table></div>
-            {% else %}<p>Belum ada clip di gallery.</p>{% endif %}
-        </section>
+                    </div>
+                    {{ pagination_bar(submissions_pager, "bottom") }}
+                    {% else %}
+                        <p class="subtitle">Belum ada link yang dikirim. Gunakan form di atas.</p>
+                    {% endif %}
+                </div>
+            </section>
+        </main>
+    </div>
 
-        <section class="card">
-            <h2>TOP 5 compilation</h2>
-            <p>Pilih workspace episode, masukkan lima momen, lalu build preview lokal sebelum upload.</p>
-            <form id="compilation-form">
-                <label for="compilation-episode">Episode</label>
-                <select id="compilation-episode" required>
-                    <option value="">Pilih episode</option>
-                    {% for episode in compilation_episodes %}<option value="{{ episode.id }}">{{ episode.title }} ({{ episode.id }})</option>{% endfor %}
-                </select>
-                <label for="compilation-header">Header</label>
-                <input id="compilation-header" value="TOP 5 MOMEN" maxlength="80" required>
-                <label for="compilation-subheader">Subheader</label>
-                <input id="compilation-subheader" placeholder="Topik kompilasi" maxlength="120">
-                <button id="compilation-suggest" class="secondary" type="button">Usul otomatis</button>
-                <p id="compilation-suggest-status" role="status" aria-live="polite"></p>
-                <div id="compilation-suggestions"></div>
-                <div id="compilation-items"></div>
-                <button type="submit">Build preview</button>
-                <p id="compilation-status" role="status" aria-live="polite"></p>
-            </form>
-            <div id="compilation-preview-actions" hidden>
-                <a id="compilation-preview-link" class="button" target="_blank" rel="noopener noreferrer">Buka preview di tab baru</a>
-            </div>
-            <video id="compilation-preview" controls preload="metadata" playsinline hidden style="display:block;width:100%;max-height:520px;background:#000"></video>
-        </section>
-
-        <section class="card">
-            <h2>Add a YouTube episode</h2>
-            <p>Tambahkan link ke antrean atau langsung mulai proses lokal. Hasil tetap lokal dan tidak otomatis dipublikasikan.</p>
-            <form method="post" action="{{ url_for('admin_add_youtube_link') }}">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                <label for="url">YouTube video link</label>
-                <input id="url" name="url" type="url" placeholder="https://www.youtube.com/watch?v=..." required>
-                <small id="youtube-lookup-status" role="status" aria-live="polite">Tempel link untuk mengisi judul dan mendeteksi podcast.</small>
-                <label for="podcast">Podcast</label>
-                <select id="podcast" name="podcast" required>
-                    <option value="" selected disabled>Pilih podcast atau tempel link</option>
-                    {% for podcast in podcasts %}<option value="{{ podcast }}">{{ podcast }}</option>{% endfor %}
-                </select>
-                <label for="title">Episode title <small>(optional)</small></label>
-                <input id="title" name="title" type="text" maxlength="200" placeholder="Add a title if you know it">
-                <button type="submit" name="action" value="process" style="margin-top:18px">Proses sekarang</button>
-                <button class="secondary" type="submit" name="action" value="queue" style="margin-top:18px">Tambahkan ke antrean</button>
-            </form>
-        </section>
-
-        <section class="card">
-            <h2>Recent submissions</h2>
-            {% if submissions %}
-                <div class="table-wrap"><table>
-                    <thead><tr><th>Submitted</th><th>Podcast / title</th><th>Video</th><th>Process</th></tr></thead>
-                    <tbody>
-                        {% for item in submissions %}
-                            <tr data-video-id="{{ item.video_id }}">
-                                <td><small>{{ item.created_at[:16].replace('T', ' ') }} UTC</small></td>
-                                <td>{{ item.podcast }}{% if item.title %}<br><small>{{ item.title }}</small>{% endif %}</td>
-                                <td><a href="{{ item.url }}" target="_blank" rel="noopener noreferrer">{{ item.video_id }}</a></td>
-                                <td class="job-progress">
-                                    <span class="job-stage">{{ item.progress.stage }}</span>
-                                    <small class="job-label">{{ item.progress.label }}</small>
-                                    <progress max="100" value="{{ item.progress.percent }}" aria-label="{{ item.progress.stage }}"></progress>
-                                </td>
-                            </tr>
-                        {% endfor %}
-                    </tbody>
-                </table></div>
-            {% else %}
-                <p>No links submitted yet.</p>
-            {% endif %}
-        </section>
-    </main>
     <script>
-        // --- Manual studio upload helpers ---
+        // --- Clipboard + manual row toggle ---
         document.addEventListener("click", (ev) => {
             const copyBtn = ev.target.closest("[data-copy]");
             if (copyBtn) {
+                ev.preventDefault();
                 const sel = copyBtn.getAttribute("data-copy");
                 const target = document.querySelector(sel);
                 if (!target) return;
-                const text = target.tagName === "INPUT" || target.tagName === "TEXTAREA" ? target.value : target.textContent || target.innerText || "";
-                const done = () => {
-                    const old = copyBtn.textContent;
-                    copyBtn.textContent = "✓ Copied";
-                    setTimeout(() => { copyBtn.textContent = old; }, 1500);
+                const text = target.tagName === "INPUT" || target.tagName === "TEXTAREA"
+                    ? target.value
+                    : target.textContent || target.innerText || "";
+                const oldHTML = copyBtn.innerHTML;
+                const restoreCopyButton = () => { copyBtn.innerHTML = oldHTML; };
+                const flashCopied = () => {
+                    copyBtn.classList.add("copy-success-flash");
+                    copyBtn.innerHTML = "✓ Tersalin";
+                    setTimeout(() => {
+                        copyBtn.classList.remove("copy-success-flash");
+                        restoreCopyButton();
+                    }, 1400);
                 };
                 try {
                     if (navigator.clipboard && navigator.clipboard.writeText) {
-                        navigator.clipboard.writeText(String(text || "")).then(done).catch(() => {
-                            window.prompt("Salin teks di bawah (Ctrl+C):", String(text || ""));
-                            done();
-                        });
+                        navigator.clipboard.writeText(String(text || ""))
+                            .then(flashCopied)
+                            .catch(() => { window.prompt("Salin (Ctrl+C):", String(text || "")); flashCopied(); });
                     } else {
-                        window.prompt("Salin teks di bawah (Ctrl+C):", String(text || ""));
-                        done();
+                        window.prompt("Salin (Ctrl+C):", String(text || ""));
+                        flashCopied();
                     }
                 } catch (e) {
-                    window.prompt("Salin teks di bawah (Ctrl+C):", String(text || ""));
-                    done();
+                    window.prompt("Salin (Ctrl+C):", String(text || ""));
+                    flashCopied();
                 }
                 return;
             }
@@ -297,202 +1657,484 @@
                 if (!target) return;
                 const wasHidden = target.hasAttribute("hidden");
                 if (wasHidden) target.removeAttribute("hidden"); else target.setAttribute("hidden", "");
+                if (wasHidden) {
+                    target.scrollIntoView({ behavior: "smooth", block: "nearest" });
+                }
                 return;
             }
         });
 
-        const jobRows = document.querySelectorAll("tr[data-video-id]");
-        const hasRunningJobs = [...jobRows].some(row => row.querySelector(".job-label")?.textContent === "Berjalan");
+        // --- Source video toggle (old per-row pattern, kept for backwards compat) ---
+        document.addEventListener("click", (ev) => {
+            const oldBtn = ev.target.closest("[data-toggle-source-video]:not([data-group-toggle-source-video])");
+            if (oldBtn) {
+                const vid = oldBtn.getAttribute("data-video-id") || "";
+                const wrap = document.getElementById("src-wrap-" + vid);
+                if (!wrap) return;
+                const iframe = wrap.querySelector("iframe");
+                const on = oldBtn.getAttribute("aria-expanded") !== "true";
+                oldBtn.setAttribute("aria-expanded", String(on));
+                wrap.setAttribute("aria-expanded", String(on));
+                wrap.toggleAttribute("hidden", !on);
+                if (iframe) {
+                    iframe.src = on ? `https://www.youtube-nocookie.com/embed/${vid}` : "";
+                }
+                oldBtn.textContent = on ? "✖ Tutup" : "▶ Putar sumber";
+                return;
+            }
+            // New grouped: toggle detail items visible
+            const itemsBtn = ev.target.closest("[data-group-toggle-items]");
+            if (itemsBtn) {
+                const targetId = itemsBtn.getAttribute("aria-controls");
+                const target = document.getElementById(targetId);
+                const group = itemsBtn.closest(".sub-group");
+                if (!target || !group) return;
+                const expanded = itemsBtn.getAttribute("aria-expanded") !== "true";
+                itemsBtn.setAttribute("aria-expanded", String(expanded));
+                target.setAttribute("aria-hidden", String(!expanded));
+                group.setAttribute("aria-expanded", String(expanded));
+                itemsBtn.textContent = expanded ? "▲ Sembunyikan" : "⋮ Detail";
+                return;
+            }
+            // New grouped: toggle source video iframe
+            const sourceBtn = ev.target.closest("[data-group-toggle-source-video]");
+            if (sourceBtn) {
+                const targetId = sourceBtn.getAttribute("aria-controls");
+                const wrap = document.getElementById(targetId);
+                const group = sourceBtn.closest(".sub-group");
+                if (!wrap || !group) return;
+                const vid = group.getAttribute("data-video-id") || "";
+                const iframe = wrap.querySelector("iframe");
+                const on = sourceBtn.getAttribute("aria-expanded") !== "true";
+                sourceBtn.setAttribute("aria-expanded", String(on));
+                wrap.setAttribute("aria-expanded", String(on));
+                if (iframe) {
+                    iframe.src = on ? `https://www.youtube-nocookie.com/embed/${vid}` : "";
+                }
+                sourceBtn.textContent = on ? "✖ Tutup sumber" : "▶ Putar sumber";
+                return;
+            }
+        });
 
+        // --- Job progress auto refresh ---
+        function countRunningAnywhere() {
+            let running = 0;
+            document.querySelectorAll(".sub-group, tr[data-video-id]").forEach(el => {
+                const labels = el.querySelectorAll(".job-label");
+                labels.forEach(l => { if (l.textContent.trim() === "Berjalan") running++; });
+                const attr = el.getAttribute("data-group-status");
+                if (attr === "in_progress") running++;
+            });
+            // Group-level chips with "Berjalan"
+            document.querySelectorAll(".sub-group-status .chip-warning").forEach(() => running++);
+            return running;
+        }
         async function refreshJobProgress() {
             try {
                 const response = await fetch("{{ url_for('admin_jobs') }}", { headers: { Accept: "application/json" } });
                 if (!response.ok) return;
                 const result = await response.json();
-                for (const job of result.jobs) {
-                    const row = document.querySelector(`tr[data-video-id="${CSS.escape(job.video_id)}"]`);
-                    if (!row) continue;
-                    row.querySelector(".job-stage").textContent = job.stage;
-                    row.querySelector(".job-label").textContent = job.label;
-                    const progress = row.querySelector("progress");
-                    progress.value = job.percent;
-                    progress.setAttribute("aria-label", job.stage);
+                // Flat per-submission item updates (inside groups)
+                for (const job of (result.jobs || [])) {
+                    const vid = job.video_id;
+                    const subItems = document.querySelectorAll(`.sub-item[data-video-id="${CSS.escape(vid)}"]`);
+                    subItems.forEach(node => {
+                        const stage = node.querySelector(".job-stage");
+                        const label = node.querySelector(".job-label");
+                        const prog  = node.querySelector("progress");
+                        if (stage) stage.textContent = job.stage || "";
+                        if (label) label.textContent = job.label || "";
+                        if (prog)  { prog.value = job.percent; prog.setAttribute("aria-label", job.stage || ""); }
+                    });
+                    // Legacy flat rows (if older templates rendered)
+                    const row = document.querySelector(`tr[data-video-id="${CSS.escape(vid)}"]`);
+                    if (row) {
+                        const s = row.querySelector(".job-stage");
+                        const l = row.querySelector(".job-label");
+                        const p = row.querySelector("progress");
+                        if (s) s.textContent = job.stage || "";
+                        if (l) l.textContent = job.label || "";
+                        if (p) { p.value = job.percent; p.setAttribute("aria-label", job.stage || ""); }
+                    }
                 }
-            } catch (error) {
-                console.error("Could not refresh episode process status", error);
+                // Group-level aggregate updates
+                for (const g of (result.groups || [])) {
+                    const groupEl = document.querySelector(`.sub-group[data-video-id="${CSS.escape(g.video_id)}"]`);
+                    if (!groupEl) continue;
+                    groupEl.setAttribute("data-group-status", g.group_status || "");
+                    // Progress agg + stage text / percent
+                    const progWrap = groupEl.querySelector(".sg-progress-wrap");
+                    if (progWrap) {
+                        const stageSpan = progWrap.querySelector(".sg-stage span");
+                        const percentSmall = progWrap.querySelector(".sg-stage small");
+                        const prog = progWrap.querySelector("progress");
+                        const labelSmall = progWrap.querySelector(".job-label");
+                        if (stageSpan) stageSpan.textContent = g.stage || g.group_status_label || "";
+                        if (percentSmall) percentSmall.textContent = `${g.percent}%`;
+                        if (prog) prog.value = g.percent;
+                        if (labelSmall) labelSmall.textContent = g.label || g.group_status_label || "";
+                    }
+                    // Chip status update
+                    const statusChip = groupEl.querySelector(".sub-group-status .chip");
+                    if (statusChip) {
+                        statusChip.className = "chip " + (g.group_status_class || "chip-info");
+                        statusChip.textContent = g.group_status_label || "";
+                    }
+                    // Mini-chips counters update
+                    const counters = [];
+                    if (g.running_count) counters.push(`${g.running_count} berjalan`);
+                    if (g.pending_count) counters.push(`${g.pending_count} antre`);
+                    if (g.completed_count) counters.push(`${g.completed_count} selesai`);
+                    if (g.failed_count) counters.push(`${g.failed_count} gagal`);
+                    const counterWrap = groupEl.querySelector(".sub-group-counters");
+                    if (counterWrap) {
+                        const total = (g.running_count||0)+(g.pending_count||0)+(g.completed_count||0)+(g.failed_count||0);
+                        const finalCounters = counters.length ? counters : [`${total} item`];
+                        counterWrap.innerHTML = finalCounters.map(c => `<span class="mini-chip">${c}</span>`).join("");
+                    }
+                }
+            } catch (e) {
+                console.error("Refresh job progress gagal", e);
             }
         }
+        // Always run periodic check: if ANY Berjalan appears (async async race), start interval.
+        // Start polling lazily 3s after first load with 5s interval for 120s while any running detected.
+        (function startPollingGuard() {
+            let intervalId = null;
+            let pollsLeft = 200;  // ~1000s max window before user needs to reload (prevents infinite leaks)
+            function tick() {
+                pollsLeft -= 1;
+                refreshJobProgress();
+                const running = countRunningAnywhere();
+                if (running <= 0 || pollsLeft <= 0) {
+                    if (intervalId) { clearInterval(intervalId); intervalId = null; }
+                }
+            }
+            // Schedule: after 3s delay, if any running found → start 5s interval
+            setTimeout(function firstCheck() {
+                refreshJobProgress();
+                const nowRunning = countRunningAnywhere();
+                if (nowRunning > 0) {
+                    intervalId = setInterval(tick, 5000);
+                } else {
+                    // Otherwise re-check every 20s (in case new submission queue state changes via backend)
+                    intervalId = setInterval(function idleTick() {
+                        refreshJobProgress();
+                        if (countRunningAnywhere() > 0) {
+                            clearInterval(intervalId);
+                            intervalId = setInterval(tick, 5000);
+                        }
+                    }, 20000);
+                }
+            }, 3000);
+        })();
 
-        if (hasRunningJobs) setInterval(refreshJobProgress, 5000);
-
+        // --- Compilation builder ---
         const compilationEpisode = document.querySelector("#compilation-episode");
-        const compilationItems = document.querySelector("#compilation-items");
-        const compilationForm = document.querySelector("#compilation-form");
-        const compilationStatus = document.querySelector("#compilation-status");
+        const compilationItems   = document.querySelector("#compilation-items");
+        const compilationForm    = document.querySelector("#compilation-form");
+        const compilationStatus  = document.querySelector("#compilation-status");
+        const compilationPreviewWrap = document.querySelector("#compilation-preview-wrap");
         const compilationPreview = document.querySelector("#compilation-preview");
-        const compilationPreviewActions = document.querySelector("#compilation-preview-actions");
         const compilationPreviewLink = document.querySelector("#compilation-preview-link");
         const compilationSuggestions = document.querySelector("#compilation-suggestions");
         const compilationSuggest = document.querySelector("#compilation-suggest");
+        const compilationAutofill5 = document.querySelector("#compilation-autofill5");
         const compilationSuggestStatus = document.querySelector("#compilation-suggest-status");
-        for (let index = 0; index < 5; index += 1) {
-            compilationItems.insertAdjacentHTML("beforeend", `
-                <div class="compilation-item">
-                    <label>Moment ${index + 1}</label>
-                    <input class="compilation-label" placeholder="Judul moment" maxlength="60" required>
-                    <input class="compilation-start" type="number" min="0" step="0.01" placeholder="Start (detik)" required>
-                    <input class="compilation-end" type="number" min="0" step="0.01" placeholder="End (detik)" required>
-                </div>`);
+        const compilationSourceWrap = document.querySelector("#compilation-source-wrap");
+        const compilationSource = document.querySelector("#compilation-source");
+        const compilationSourceLink = document.querySelector("#compilation-source-link");
+        let lastCandidates = []; // cache "Usul otomatis" result untuk autofill tanpa hit ulang
+
+        function resetCompilationSlots() {
+            compilationItems.innerHTML = "";
+            for (let index = 0; index < 5; index += 1) {
+                compilationItems.insertAdjacentHTML("beforeend", `
+                    <div class="comp-item">
+                        <div class="comp-item-num">MOMEN ${index + 1}</div>
+                        <label>Judul moment</label>
+                        <input class="compilation-label" placeholder="Contoh: Opening punchline Pak X" maxlength="60" required>
+                        <label>Start (detik)</label>
+                        <input class="compilation-start" type="number" min="0" step="0.01" placeholder="Misal 124.5" required>
+                        <label>End (detik)</label>
+                        <input class="compilation-end" type="number" min="0" step="0.01" placeholder="Misal 168.0" required>
+                    </div>`);
+            }
         }
+        resetCompilationSlots();
+
+        function fillNextSlot(start, end, label) {
+            const target = [...document.querySelectorAll(".comp-item")].find((it) => !it.querySelector(".compilation-start").value);
+            if (!target) return null;
+            target.querySelector(".compilation-start").value = Number(start);
+            target.querySelector(".compilation-end").value   = Math.max(Number(start) + 5, Number(end || start));
+            target.querySelector(".compilation-label").value = String(label || "").slice(0, 60);
+            return target;
+        }
+
+        function setStatus(node, text, kind) {
+            node.textContent = text;
+            node.classList.remove("ok", "warn", "err");
+            if (kind) node.classList.add(kind);
+        }
+
+        function renderCandidatesForReview(candidates, sourceWarning) {
+            compilationSuggestions.hidden = false;
+            compilationSuggestions.innerHTML = "";
+            const header = document.createElement("div");
+            header.style.cssText = "width:100%;color:var(--text-muted);margin:0 0 8px;font-size:.82rem";
+            header.innerHTML = (sourceWarning
+                ? `<strong style="color:var(--warning)">⚠ Fallback transcript:</strong> Klik kandidat di bawah untuk mengisi slot momen 1–5 secara berurutan. Review dulu sebelum pilih ya.`
+                : `<strong style="color:var(--success)">✔ ${candidates.length} kandidat dari LLM:</strong> Klik kandidat di bawah untuk mengisi slot momen 1–5 secara berurutan.`);
+            compilationSuggestions.appendChild(header);
+            candidates.forEach((cand, i) => {
+                const btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "btn btn-ghost";
+                btn.style.cssText = "justify-content:flex-start;align-items:flex-start;text-align:left;width:100%;max-width:100%;white-space:normal;padding:10px 12px;gap:8px;line-height:1.4";
+                const dur = Math.max(0, Number(cand.end || 0) - Number(cand.start || 0)).toFixed(1);
+                btn.innerHTML = `
+                    <div style="font-weight:600;color:var(--accent)">#${i + 1} · ${Number(cand.start).toFixed(1)}–${Number(cand.end).toFixed(1)}s <small style="color:var(--text-muted)">(dur ${dur}s)</small></div>
+                    <div style="color:var(--text);margin-top:2px">${String(cand.title || "").replace(/</g, "&lt;")}</div>
+                    ${cand.reason ? `<div style="color:var(--text-muted);margin-top:4px;font-size:.8rem">💡 ${String(cand.reason).replace(/</g, "&lt;")}</div>` : ""}`;
+                btn.addEventListener("click", () => {
+                    const filled = fillNextSlot(cand.start, cand.end, cand.title);
+                    if (!filled) {
+                        setStatus(compilationSuggestStatus, "Semua 5 slot momen sudah terisi. Hapus salah satu untuk ganti.", "warn");
+                        return;
+                    }
+                    // Kalau source video ready, seek ke timestamp
+                    try {
+                        if (compilationSource && !Number.isNaN(Number(cand.start))) {
+                            compilationSource.currentTime = Number(cand.start);
+                            compilationSource.play().catch(() => {});
+                        }
+                    } catch (e) { /* noop */ }
+                    setStatus(compilationSuggestStatus, `Momen ditambahkan ke slot (${candidates.length - 1} kandidat tersisa, pilih lagi).`, "ok");
+                });
+                compilationSuggestions.appendChild(btn);
+            });
+        }
+
         compilationSuggest.addEventListener("click", async () => {
             if (!compilationEpisode.value) {
-                compilationSuggestStatus.textContent = "Pilih episode dulu.";
+                setStatus(compilationSuggestStatus, "Pilih episode dulu sebelum usul otomatis.", "warn");
                 return;
             }
-            compilationSuggestStatus.textContent = "Mencari kandidat moment...";
-            const response = await fetch("{{ url_for('admin_compilation_moments') }}", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Accept: "application/json" },
-                body: JSON.stringify({ csrf_token: "{{ csrf_token }}", episode_id: compilationEpisode.value }),
-            });
-            const result = await response.json();
-            if (!response.ok) {
-                compilationSuggestStatus.textContent = result.error || "Usulan gagal.";
-                return;
-            }
-            const slots = [...document.querySelectorAll(".compilation-item")];
-            result.candidates.slice(0, 5).forEach((candidate, index) => {
-                const slot = slots[index];
-                slot.querySelector(".compilation-start").value = candidate.start;
-                slot.querySelector(".compilation-end").value = candidate.end;
-                slot.querySelector(".compilation-label").value = candidate.title;
-            });
-            compilationSuggestStatus.textContent = result.warning
-                ? `${result.candidates.length} kandidat fallback ditemukan. Review sebelum build.`
-                : `${result.candidates.length} kandidat ditemukan. Review sebelum build.`;
-        });
-        compilationEpisode.addEventListener("change", async () => {
-            compilationSuggestions.textContent = "Memuat transcript...";
-            const response = await fetch(`/admin/compilation/segments/${encodeURIComponent(compilationEpisode.value)}`);
-            const result = await response.json();
-            if (!response.ok) {
-                compilationSuggestions.textContent = result.error || "Transcript tidak tersedia.";
-                return;
-            }
-            compilationSuggestions.innerHTML = "<small>Pilih segmen untuk mengisi moment pertama yang kosong:</small>";
-            result.segments.slice(0, 80).forEach((segment) => {
-                const button = document.createElement("button");
-                button.type = "button";
-                button.className = "secondary";
-                button.style.margin = "4px";
-                button.textContent = `${segment.start.toFixed(1)}-${segment.end.toFixed(1)} ${segment.text.slice(0, 80)}`;
-                button.addEventListener("click", () => {
-                    const target = [...document.querySelectorAll(".compilation-item")].find((item) => !item.querySelector(".compilation-start").value);
-                    if (!target) return;
-                    target.querySelector(".compilation-start").value = segment.start;
-                    target.querySelector(".compilation-end").value = Math.min(segment.end + 40, segment.end + 40);
-                    target.querySelector(".compilation-label").value = segment.text.slice(0, 60);
+            setStatus(compilationSuggestStatus, "Mencari kandidat moment (fallback transcript laughter)...", "");
+            try {
+                const response = await fetch("{{ url_for('admin_compilation_moments') }}", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", Accept: "application/json" },
+                    body: JSON.stringify({ csrf_token: "{{ csrf_token }}", episode_id: compilationEpisode.value }),
                 });
-                compilationSuggestions.appendChild(button);
-            });
-        });
-        compilationForm.addEventListener("submit", async (event) => {
-            event.preventDefault();
-            const items = [...document.querySelectorAll(".compilation-item")].map((item) => ({
-                label: item.querySelector(".compilation-label").value,
-                start: item.querySelector(".compilation-start").value,
-                end: item.querySelector(".compilation-end").value,
-            }));
-            compilationStatus.textContent = "Build dimulai...";
-            const response = await fetch("{{ url_for('admin_compilation_build') }}", {
-                method: "POST",
-                headers: { "Content-Type": "application/json", Accept: "application/json" },
-                body: JSON.stringify({
-                    csrf_token: "{{ csrf_token }}",
-                    episode_id: compilationEpisode.value,
-                    header_l1: document.querySelector("#compilation-header").value,
-                    header_l2: compilationEpisode.options[compilationEpisode.selectedIndex]?.text || "",
-                    subheader: document.querySelector("#compilation-subheader").value,
-                    items,
-                }),
-            });
-            const result = await response.json();
-            if (!response.ok) {
-                compilationStatus.textContent = result.error || "Build gagal.";
-                return;
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "Usul gagal dijalankan.");
+                lastCandidates = Array.isArray(result.candidates) ? result.candidates.slice() : [];
+                renderCandidatesForReview(lastCandidates, !!result.warning);
+                setStatus(compilationSuggestStatus,
+                    lastCandidates.length + " kandidat ditemukan" + (result.warning ? " (fallback transcript)" : "") + ". Klik kandidat di atas untuk isi slot 1–5.",
+                    result.warning ? "warn" : "ok");
+            } catch (e) {
+                setStatus(compilationSuggestStatus, e.message || "Usul gagal.", "err");
             }
-            const poll = setInterval(async () => {
-                const statusResponse = await fetch(`/admin/compilation/status/${encodeURIComponent(compilationEpisode.value)}`);
-                const status = await statusResponse.json();
-                compilationStatus.textContent = status.status === "running" ? "Sedang merender..." : status.status;
-                if (status.status === "completed") {
-                    clearInterval(poll);
-                    const previewUrl = `${status.preview}?v=${Date.now()}`;
-                    compilationPreview.src = previewUrl;
-                    compilationPreview.hidden = false;
-                    compilationPreviewActions.hidden = false;
-                    compilationPreviewLink.href = previewUrl;
-                    compilationPreview.load();
-                } else if (status.status === "failed") {
-                    clearInterval(poll);
-                }
-            }, 3000);
         });
 
-        const youtubeUrl = document.querySelector("#url");
+        compilationAutofill5.addEventListener("click", () => {
+            const pool = (lastCandidates && lastCandidates.length) ? lastCandidates : [];
+            if (!pool.length) {
+                setStatus(compilationSuggestStatus, "Klik ✨ Usul otomatis dulu untuk mengambil kandidat, baru isi 5 langsung.", "warn");
+                return;
+            }
+            const slots = [...document.querySelectorAll(".comp-item")];
+            pool.slice(0, 5).forEach((candidate, index) => {
+                const slot = slots[index]; if (!slot) return;
+                slot.querySelector(".compilation-start").value = Number(candidate.start);
+                slot.querySelector(".compilation-end").value   = Number(candidate.end);
+                slot.querySelector(".compilation-label").value = String(candidate.title || "").slice(0, 60);
+            });
+            setStatus(compilationSuggestStatus, `Isi 5 otomatis dari ${pool.length} kandidat selesai. Review sebelum build ya.`, "ok");
+        });
+
+        compilationEpisode.addEventListener("change", async () => {
+            compilationSuggestions.hidden = true;
+            compilationSuggestions.innerHTML = "";
+            lastCandidates = [];
+            resetCompilationSlots();
+            // Video sumber
+            if (compilationSourceWrap && compilationSource) {
+                compilationSource.removeAttribute("src");
+                compilationSource.load();
+                compilationSourceWrap.hidden = true;
+            }
+            if (!compilationEpisode.value) return;
+            const sourceUrl = `/admin/compilation/source/${encodeURIComponent(compilationEpisode.value)}`;
+            try {
+                const probe = await fetch(sourceUrl, { method: "HEAD" });
+                if (probe.ok) {
+                    compilationSource.src = sourceUrl + "?v=" + Date.now();
+                    compilationSourceLink.href = compilationSource.src;
+                    compilationSourceWrap.hidden = false;
+                    compilationSource.load();
+                }
+            } catch (e) { /* noop */ }
+            setStatus(compilationSuggestStatus, "Memuat transcript...", "");
+            try {
+                const response = await fetch(`/admin/compilation/segments/${encodeURIComponent(compilationEpisode.value)}`);
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "Transcript tidak tersedia.");
+                compilationSuggestions.hidden = false;
+                compilationSuggestions.innerHTML = '<small style="width:100%;color:var(--text-muted);margin-bottom:4px;display:block">Klik segmen transcript untuk mengisi slot momen pertama yang masih kosong:</small>';
+                (result.segments || []).slice(0, 80).forEach((segment) => {
+                    const btn = document.createElement("button");
+                    btn.type = "button";
+                    btn.className = "btn btn-ghost";
+                    btn.textContent = `${Number(segment.start).toFixed(1)}-${Number(segment.end).toFixed(1)}s · ${String(segment.text || "").slice(0, 80)}`;
+                    btn.addEventListener("click", () => {
+                        const filled = fillNextSlot(segment.start, Math.max(Number(segment.start) + 5, Number(segment.end || segment.start)), segment.text);
+                        if (!filled) {
+                            setStatus(compilationSuggestStatus, "Semua 5 slot momen sudah terisi. Hapus salah satu untuk ganti.", "warn");
+                            return;
+                        }
+                        try {
+                            if (compilationSource && !Number.isNaN(Number(segment.start))) {
+                                compilationSource.currentTime = Number(segment.start);
+                                compilationSource.play().catch(() => {});
+                            }
+                        } catch (e) { /* noop */ }
+                    });
+                    compilationSuggestions.appendChild(btn);
+                });
+                setStatus(compilationSuggestStatus, `${result.segments.length} segmen tersedia.`, "ok");
+            } catch (e) {
+                setStatus(compilationSuggestStatus, e.message || "Transcript gagal dimuat.", "err");
+            }
+        });
+
+        // --- Submissions: "Putar sumber" toggle YouTube iframe embed ---
+        document.addEventListener("click", (ev) => {
+            const btn = ev.target.closest("[data-toggle-source-video]");
+            if (!btn) return;
+            ev.preventDefault();
+            const videoId = btn.getAttribute("data-video-id");
+            const wrap = document.getElementById("src-wrap-" + videoId);
+            if (!wrap) return;
+            const iframe = wrap.querySelector("iframe");
+            const isOpen = !wrap.hasAttribute("hidden");
+            if (isOpen) {
+                wrap.setAttribute("hidden", "");
+                btn.setAttribute("aria-expanded", "false");
+                btn.textContent = "▶ Putar sumber";
+                if (iframe) { iframe.src = ""; }
+            } else {
+                wrap.removeAttribute("hidden");
+                btn.setAttribute("aria-expanded", "true");
+                btn.textContent = "✖ Tutup";
+                if (iframe && !iframe.src) {
+                    iframe.src = `https://www.youtube-nocookie.com/embed/${encodeURIComponent(videoId)}?rel=0&modestbranding=1`;
+                }
+            }
+        });
+
+        compilationForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const items = [...document.querySelectorAll(".comp-item")].map((it) => ({
+                label: it.querySelector(".compilation-label").value,
+                start: it.querySelector(".compilation-start").value,
+                end:   it.querySelector(".compilation-end").value,
+            }));
+            setStatus(compilationStatus, "Build dimulai...", "");
+            try {
+                const response = await fetch("{{ url_for('admin_compilation_build') }}", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json", Accept: "application/json" },
+                    body: JSON.stringify({
+                        csrf_token: "{{ csrf_token }}",
+                        episode_id: compilationEpisode.value,
+                        header_l1: document.querySelector("#compilation-header").value,
+                        header_l2: compilationEpisode.options[compilationEpisode.selectedIndex]?.text || "",
+                        subheader: document.querySelector("#compilation-subheader").value,
+                        items,
+                    }),
+                });
+                const result = await response.json();
+                if (!response.ok) throw new Error(result.error || "Build gagal dijalankan.");
+                const poll = setInterval(async () => {
+                    try {
+                        const r = await fetch(`/admin/compilation/status/${encodeURIComponent(compilationEpisode.value)}`);
+                        const s = await r.json();
+                        if (s.status === "running") {
+                            setStatus(compilationStatus, "Sedang merender...", "");
+                        } else if (s.status === "completed") {
+                            clearInterval(poll);
+                            const url = `${s.preview}?v=${Date.now()}`;
+                            compilationPreview.src = url;
+                            compilationPreviewLink.href = url;
+                            compilationPreviewWrap.hidden = false;
+                            setStatus(compilationStatus, "Build selesai. Preview siap ditonton.", "ok");
+                            compilationPreview.load();
+                        } else if (s.status === "failed") {
+                            clearInterval(poll);
+                            setStatus(compilationStatus, "Build gagal. Cek log di server.", "err");
+                        } else {
+                            setStatus(compilationStatus, "Status: " + s.status, "warn");
+                        }
+                    } catch (e) {
+                        console.error(e);
+                    }
+                }, 3000);
+            } catch (e) {
+                setStatus(compilationStatus, e.message || "Build gagal.", "err");
+            }
+        });
+
+        // --- YouTube URL lookup ---
+        const youtubeUrl    = document.querySelector("#url");
         const podcastSelect = document.querySelector("#podcast");
-        const titleInput = document.querySelector("#title");
-        const lookupStatus = document.querySelector("#youtube-lookup-status");
+        const titleInput    = document.querySelector("#title");
+        const lookupStatus  = document.querySelector("#youtube-lookup-status");
         let lookupTimer;
         let lookupSequence = 0;
         let autoPodcast = "";
         let autoTitle = "";
         let podcastWasEdited = false;
-
-        podcastSelect.addEventListener("change", () => {
-            podcastWasEdited = true;
-        });
+        podcastSelect.addEventListener("change", () => { podcastWasEdited = true; });
 
         youtubeUrl.addEventListener("input", () => {
             clearTimeout(lookupTimer);
             const sequence = ++lookupSequence;
-            if (!youtubeUrl.value.trim()) {
-                lookupStatus.textContent = "Tempel link untuk mengisi judul dan mendeteksi podcast.";
+            const raw = youtubeUrl.value.trim();
+            if (!raw) {
+                setStatus(lookupStatus, "Tempel link untuk otomatis mengisi judul dan mendeteksi nama podcast.", "");
                 return;
             }
-            if (autoPodcast && !podcastWasEdited && podcastSelect.value === autoPodcast) {
-                podcastSelect.value = "";
-            }
-            if (autoTitle && titleInput.value === autoTitle) {
-                titleInput.value = "";
-            }
-            autoPodcast = "";
-            autoTitle = "";
-            lookupStatus.textContent = "Mencari judul dan podcast...";
+            if (autoPodcast && !podcastWasEdited && podcastSelect.value === autoPodcast) podcastSelect.value = "";
+            if (autoTitle && titleInput.value === autoTitle) titleInput.value = "";
+            autoPodcast = ""; autoTitle = "";
+            setStatus(lookupStatus, "Mencari judul & podcast...", "");
             lookupTimer = setTimeout(async () => {
                 try {
-                    const endpoint = "{{ url_for('admin_youtube_metadata') }}?url=" + encodeURIComponent(youtubeUrl.value.trim());
+                    const endpoint = "{{ url_for('admin_youtube_metadata') }}?url=" + encodeURIComponent(raw);
                     const response = await fetch(endpoint, { headers: { Accept: "application/json" } });
                     const metadata = await response.json();
                     if (sequence !== lookupSequence) return;
                     if (!response.ok) throw new Error(metadata.error || "Metadata tidak tersedia.");
-                    if (!titleInput.value) {
-                        titleInput.value = metadata.title;
-                        autoTitle = metadata.title;
-                    }
+                    if (!titleInput.value) { titleInput.value = metadata.title; autoTitle = metadata.title; }
                     if (metadata.podcast && !podcastWasEdited) {
                         podcastSelect.value = metadata.podcast;
                         autoPodcast = metadata.podcast;
-                        lookupStatus.textContent = `Terdeteksi: ${metadata.title} · ${metadata.podcast}`;
+                        setStatus(lookupStatus, `Terdeteksi: ${metadata.title} · ${metadata.podcast}`, "ok");
                     } else {
-                        lookupStatus.textContent = metadata.podcast
-                            ? `Judul terisi: ${metadata.title} · pilihan podcast manual dipertahankan.`
-                            : `Judul terisi: ${metadata.title} · podcast belum dikenali, pilih manual.`;
+                        setStatus(lookupStatus,
+                            metadata.podcast
+                                ? `Judul terisi: ${metadata.title} · pilihan podcast manual dipertahankan.`
+                                : `Judul terisi: ${metadata.title} · podcast belum dikenali, pilih manual.`,
+                            metadata.podcast ? "ok" : "warn");
                     }
-                } catch (error) {
-                    if (sequence === lookupSequence) lookupStatus.textContent = error.message;
+                } catch (e) {
+                    if (sequence === lookupSequence) setStatus(lookupStatus, e.message, "err");
                 }
-            }, 500);
+            }, 450);
         });
     </script>
 </body>
