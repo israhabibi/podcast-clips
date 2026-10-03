@@ -36,6 +36,96 @@ JOB_STAGES = {
     "cut": ("Merender klip dan subtitle", 75),
     "caption": ("Membuat caption", 90),
 }
+DEFAULT_PER_PAGE = 10
+ALLOWED_PER_PAGE = (5, 10, 25, 50, 100)
+UI_SELECT_PER_PAGE = (10, 25, 50, 100)
+
+
+def _coerce_int(raw, default, minimum=1):
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    if value < minimum:
+        return minimum
+    return value
+
+
+def _build_url_for_page(endpoint, page, per_page, extra_args=None, page_key="page", per_key="per_page"):
+    args = {}
+    if extra_args:
+        args.update({k: v for k, v in extra_args.items() if v not in (None, "", [])})
+    args[page_key] = int(page)
+    args[per_key] = int(per_page)
+    return url_for(endpoint, **args)
+
+
+def _paginate(items, page, per_page, endpoint, base_args=None, page_key="page", per_key="per_page"):
+    """Slices items list (small, in-memory OK for 100-2000 rows) into page dict.
+
+    Returns dict ready for Jinja render with:
+      items, page, per_page, total, total_pages,
+      has_prev, has_next, prev_url, next_url,
+      pages (list of int|None for smart ellipsis),
+      first_url, last_url,
+      start_idx, end_idx, total.
+    """
+    total = len(items)
+    per_page = per_page if per_page in ALLOWED_PER_PAGE else DEFAULT_PER_PAGE
+    total_pages = max(1, (total + per_page - 1) // per_page)
+    if page > total_pages:
+        page = total_pages
+    start_idx = (page - 1) * per_page
+    end_idx = start_idx + per_page
+    paged_items = items[start_idx:end_idx]
+
+    # Build page number list with smart ellipsis (None = gap)
+    pages = []
+    if total_pages <= 7:
+        pages = list(range(1, total_pages + 1))
+    else:
+        # Always show first, last, current ± 1; fill gaps with None
+        def add_unique(xs, val):
+            if xs and xs[-1] is None and val is None:
+                return
+            xs.append(val)
+        window = sorted({1, total_pages, page - 1, page, page + 1})
+        prev = 0
+        for p in window:
+            if p < 1 or p > total_pages:
+                continue
+            if prev and p - prev > 1:
+                add_unique(pages, None)
+            add_unique(pages, p)
+            prev = p
+
+    has_prev = page > 1
+    has_next = page < total_pages
+    prev_url = _build_url_for_page(endpoint, page - 1, per_page, base_args, page_key, per_key) if has_prev else None
+    next_url = _build_url_for_page(endpoint, page + 1, per_page, base_args, page_key, per_key) if has_next else None
+    first_url = _build_url_for_page(endpoint, 1, per_page, base_args, page_key, per_key) if page != 1 else None
+    last_url = _build_url_for_page(endpoint, total_pages, per_page, base_args, page_key, per_key) if page != total_pages else None
+
+    return {
+        "items": paged_items,
+        "page": page,
+        "per_page": per_page,
+        "total": total,
+        "total_pages": total_pages,
+        "has_prev": has_prev,
+        "has_next": has_next,
+        "prev_url": prev_url,
+        "next_url": next_url,
+        "first_url": first_url,
+        "last_url": last_url,
+        "pages": pages,
+        "allowed_per_page": tuple(UI_SELECT_PER_PAGE),
+        "page_key": page_key,
+        "per_key": per_key,
+        # For "Menampilkan X-Y dari Z"
+        "start_idx": 0 if total == 0 else start_idx + 1,
+        "end_idx": min(end_idx, total),
+    }
 
 
 def _job_progress(item):
@@ -72,6 +162,115 @@ def _job_progress(item):
         label, percent = JOB_STAGES[stage]
         return {"label": "Berjalan", "stage": label, "percent": percent}
     return {"label": "Berjalan", "stage": "Memulai proses", "percent": 3}
+
+
+def _group_submissions_by_video(submission_items):
+    groups = {}
+    order = []
+    for submission in submission_items:
+        vid = submission.get("video_id") or ""
+        if not vid:
+            continue
+        if vid not in groups:
+            title = (submission.get("title") or "").strip()
+            group = {
+                "video_id": vid,
+                "video_url": submission.get("url") or f"https://www.youtube.com/watch?v={vid}",
+                "podcast": submission.get("podcast") or "",
+                "title": title or f"Episode YouTube {vid}",
+                "submissions": [],
+                "first_created": submission.get("created_at") or "",
+                "last_created": submission.get("created_at") or "",
+                "worst_status_weight": -1,
+                "worst_status": submission.get("status") or "pending",
+                "worst_progress": submission.get("progress") or {"stage": "-", "label": "Tunggu", "percent": 0},
+                "running_count": 0,
+                "completed_count": 0,
+                "failed_count": 0,
+                "pending_count": 0,
+                "max_percent": 0,
+            }
+            groups[vid] = group
+            order.append(vid)
+        g = groups[vid]
+        status = submission.get("status") or "pending"
+        progress = submission.get("progress") or {"stage": "-", "label": "-", "percent": 0}
+        weight = {
+            "in_progress": 100,
+            "pending": 50,
+            "failed": 25,
+            "completed": 0,
+        }.get(status, 10)
+        if weight > g["worst_status_weight"]:
+            g["worst_status_weight"] = weight
+            g["worst_status"] = status
+            g["worst_progress"] = progress
+        g["max_percent"] = max(g["max_percent"], int(progress.get("percent") or 0))
+        if status == "in_progress":
+            g["running_count"] += 1
+        elif status == "completed":
+            g["completed_count"] += 1
+        elif status == "failed":
+            g["failed_count"] += 1
+        else:
+            g["pending_count"] += 1
+        ca = submission.get("created_at") or ""
+        if ca and ca < (g["first_created"] or ca):
+            g["first_created"] = ca
+        if ca and ca > (g["last_created"] or ca):
+            g["last_created"] = ca
+        g["submissions"].append(submission)
+    # Sort: any running first → pending → failed → completed; inside same sort by last_created desc
+    STATUS_ORDER = {"in_progress": 0, "pending": 1, "failed": 2, "completed": 3}
+    def sort_key(vid):
+        g = groups[vid]
+        return (STATUS_ORDER.get(g["worst_status"], 9), -(g["running_count"]), g["last_created"] or "")
+    ordered_vids = sorted(order, key=sort_key)
+    # Final aggregate status label per group
+    STATUS_LABEL = {
+        "in_progress": ("Berjalan", "chip chip-warning"),
+        "pending":     ("Antrean",  "chip chip-info"),
+        "failed":      ("Gagal",    "chip chip-danger"),
+        "completed":   ("Selesai",  "chip chip-success"),
+    }
+    out_groups = []
+    for vid in ordered_vids:
+        g = groups[vid]
+        # Mirror "items" key (for template {{ group.items|length }}) WITHOUT shadowing dict.items() method:
+        # NEVER use g["items"] / g.items hybrid via same name while iterating dict keys via .items();
+        # instead build new_group cleanly using dedicated "items" key only after all dict-method iterations are done.
+        submission_list = list(g["submissions"])
+        label, cls = STATUS_LABEL.get(g["worst_status"], STATUS_LABEL["pending"])
+        rc = g["running_count"]; cc = g["completed_count"]; fc = g["failed_count"]; pc = g["pending_count"]
+        if rc and not cc and not fc and not pc:
+            label = f"Berjalan ({rc})"
+        elif g["worst_status"] == "completed":
+            label = f"Selesai ({cc})"
+        elif g["worst_status"] == "pending":
+            label = f"Antrean ({pc})"
+        elif g["worst_status"] == "failed":
+            label = f"Gagal ({fc})"
+        else:
+            totals = rc + pc
+            if totals > 1:
+                label = f"{label} ({totals})"
+        counters = []
+        if rc: counters.append(f"{rc} berjalan")
+        if pc: counters.append(f"{pc} antre")
+        if cc: counters.append(f"{cc} selesai")
+        if fc: counters.append(f"{fc} gagal")
+        new_group = {
+            "video_id": g["video_id"], "video_url": g["video_url"], "podcast": g["podcast"],
+            "title": g["title"],
+            "first_created": g["first_created"], "last_created": g["last_created"],
+            "worst_status": g["worst_status"], "worst_progress": dict(g["worst_progress"]),
+            "running_count": rc, "completed_count": cc, "failed_count": fc, "pending_count": pc,
+            "max_percent": g["max_percent"],
+            "group_status_label": label, "group_status_class": cls, "counters": counters,
+            "items": submission_list,
+        }
+        out_groups.append(new_group)
+    return out_groups
 
 
 def _submissions_with_progress():
@@ -266,13 +465,55 @@ def admin_logout():
 @app.route("/admin")
 @admin_required()
 def admin_page():
+    clips_page = _coerce_int(request.args.get("clip_page"), 1)
+    clips_per_page = _coerce_int(request.args.get("clip_per_page"), DEFAULT_PER_PAGE)
+    sub_page = _coerce_int(request.args.get("sub_page"), 1)
+    sub_per_page = _coerce_int(request.args.get("sub_per_page"), DEFAULT_PER_PAGE)
+
+    all_clips = _deployed_clips()
+    clips_base_args = {
+        "sub_page": sub_page if sub_page != 1 else None,
+        "sub_per_page": sub_per_page if sub_per_page != DEFAULT_PER_PAGE else None,
+    }
+    clips_pager = _paginate(
+        all_clips, clips_page, clips_per_page, "admin_page",
+        base_args=clips_base_args,
+        page_key="clip_page", per_key="clip_per_page",
+    )
+    clips_pager["endpoint"] = "admin_page"
+    clips_pager["other_page_key"] = "sub_page"
+    clips_pager["other_per_key"] = "sub_per_page"
+    clips_pager["other_page_val"] = sub_page
+    clips_pager["other_per_val"] = sub_per_page
+
+    all_subs = _submissions_with_progress()
+    grouped_subs = _group_submissions_by_video(all_subs)
+
+    sub_base_args = {
+        "clip_page": clips_page if clips_page != 1 else None,
+        "clip_per_page": clips_per_page if clips_per_page != DEFAULT_PER_PAGE else None,
+    }
+    sub_pager = _paginate(
+        grouped_subs, sub_page, sub_per_page, "admin_page",
+        base_args=sub_base_args,
+        page_key="sub_page", per_key="sub_per_page",
+    )
+    sub_pager["endpoint"] = "admin_page"
+    sub_pager["other_page_key"] = "clip_page"
+    sub_pager["other_per_key"] = "clip_per_page"
+    sub_pager["other_page_val"] = clips_page
+    sub_pager["other_per_val"] = clips_per_page
+    sub_pager["total_items_flat"] = len(all_subs)
+
     return render_template(
         "admin.html",
         csrf_token=csrf_token(),
         podcasts=PODCASTS,
-        submissions=_submissions_with_progress(),
+        submissions=sub_pager["items"],
+        submissions_pager=sub_pager,
         compilation_episodes=_compilation_episodes(),
-        deployed_clips=_deployed_clips(),
+        deployed_clips=clips_pager["items"],
+        clips_pager=clips_pager,
         youtube_ready=bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET),
         tiktok_ready=bool(TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET),
         youtube_connected=os.path.exists(YOUTUBE_TOKEN_FILE),
@@ -283,15 +524,32 @@ def admin_page():
 @app.route("/admin/jobs")
 @admin_required()
 def admin_jobs():
-    jobs = [
+    grouped = _group_submissions_by_video(_submissions_with_progress())
+    jobs = []
+    for g in grouped:
+        for submission in g.get("items", g.get("submissions", [])):
+            jobs.append({
+                "video_id": submission["video_id"],
+                "status": submission["status"],
+                **submission["progress"],
+            })
+    groups_payload = [
         {
-            "video_id": item["video_id"],
-            "status": item["status"],
-            **item["progress"],
+            "video_id": g["video_id"],
+            "group_status": g["worst_status"],
+            "group_status_label": g["group_status_label"],
+            "group_status_class": g["group_status_class"],
+            "stage": g["worst_progress"].get("stage", ""),
+            "label": g["worst_progress"].get("label", ""),
+            "percent": g["max_percent"],
+            "running_count": g["running_count"],
+            "pending_count": g["pending_count"],
+            "completed_count": g["completed_count"],
+            "failed_count": g["failed_count"],
         }
-        for item in _submissions_with_progress()
+        for g in grouped
     ]
-    return jsonify(jobs=jobs)
+    return jsonify(jobs=jobs, groups=groups_payload)
 
 
 @app.route("/admin/compilation/segments/<episode_id>")
@@ -436,6 +694,16 @@ def admin_compilation_preview(episode_id):
     if output_path is None or not output_path.is_file():
         return "Compilation not ready", 404
     return send_file(output_path, mimetype="video/mp4", conditional=True)
+
+
+@app.route("/admin/compilation/source/<episode_id>")
+@admin_required()
+def admin_compilation_source(episode_id):
+    workdir = _compilation_workdir(episode_id)
+    source_path = workdir / "source.mp4" if workdir else None
+    if source_path is None or not source_path.is_file():
+        return "Source video not found", 404
+    return send_file(source_path, mimetype="video/mp4", conditional=True)
 
 
 @app.route("/admin/compilation/status/<episode_id>")

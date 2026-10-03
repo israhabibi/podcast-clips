@@ -53,7 +53,10 @@ for i, c in enumerate(clips, 1):
         ass.append(f"Dialogue: 0,{ts(st)},{ts(en)},Default,,0,0,0,,{txt}")
     subs_file = WORK_DIR / "subs.ass"
     subs_file.write_text("\n".join(ass))
-    out = str(CLIPS_DIR / f"clip{i:02d}.mp4")
+    out_name = str(c.get("filename")) if isinstance(c.get("filename"), str) and c.get("filename").strip() else f"clip{i:02d}.mp4"
+    if Path(out_name).name != out_name:
+        out_name = Path(out_name).name
+    out = str(CLIPS_DIR / out_name)
     vf = (f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,"
           f"ass={subs_file}:fontsdir=/usr/share/fonts/truetype/dejavu")
     r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),

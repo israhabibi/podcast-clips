@@ -235,7 +235,7 @@ class AdminPageTests(unittest.TestCase):
         response = self.client.get("/admin")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"compilation-preview-link", response.data)
-        self.assertIn(b"Buka preview di tab baru", response.data)
+        self.assertIn(b"Buka di tab baru", response.data)
 
     def test_compilation_moments_uses_mocked_llm_and_filters_candidates(self):
         import app.routes.admin as admin_routes

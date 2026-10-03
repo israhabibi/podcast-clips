@@ -70,7 +70,9 @@ Balas HANYA caption-nya.""")
         cap = cap.strip()
         for f in found:
             cap += f"\n{f['url']}"
-    results[str(i)] = {"clip": f"clip{i:02d}.mp4", "title": c["title"], "caption": cap, "query": q}
+    clip_filename = c.get("filename") if isinstance(c.get("filename"), str) and c.get("filename").strip() else f"clip{i:02d}.mp4"
+    clip_filename = str(Path(clip_filename).name)  # ensure plain basename
+    results[str(i)] = {"clip": clip_filename, "title": c["title"], "caption": cap, "query": q}
     print(f"  caption: {cap[:100]}")
 
 with open(WORK_DIR / "captions.json", "w") as f:

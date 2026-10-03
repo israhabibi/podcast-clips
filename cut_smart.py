@@ -257,8 +257,12 @@ for i, c in enumerate(clips, 1):
     xexpr = "".join(exprs) + f"{last_x:.0f}" + ")" * len(exprs)
     vf = (f"crop={crop_w}:ih:'{xexpr}':0,scale=1080:1920,"
           f"ass={subs_file}:fontsdir=/usr/share/fonts/truetype/dejavu")
-    out = CLIPS_DIR / f"clip{i:02d}.mp4"
-    tmp_out = CLIPS_DIR / f".clip{i:02d}.tmp.mp4"
+    out_name = str(c.get("filename")) if isinstance(c.get("filename"), str) and c.get("filename").strip() else f"clip{i:02d}.mp4"
+    if Path(out_name).name != out_name:  # just be safe: clip["filename"] must be plain basename, no path sep
+        out_name = Path(out_name).name
+    out = CLIPS_DIR / out_name
+    tmp_out_name = "." + Path(out_name).stem + ".tmp" + Path(out_name).suffix
+    tmp_out = CLIPS_DIR / tmp_out_name
     r = subprocess.run([FFMPEG, "-y", "-ss", str(start), "-t", str(dur),
         "-i", str(EP), "-vf", vf, "-c:v", "libx264", "-preset", "medium",
         "-crf", "23", "-c:a", "aac", "-b:a", "128k", str(tmp_out)],

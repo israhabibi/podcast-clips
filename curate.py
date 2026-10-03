@@ -32,6 +32,28 @@ PODCAST_SLUG = sys.argv[2] if len(sys.argv) > 2 else "unknown"
 EPISODE_TITLE_RAW = sys.argv[3] if len(sys.argv) > 3 else "episode"
 EPISODE_SLUG = re.sub(r'[^a-z0-9]+', '-', EPISODE_TITLE_RAW.lower()).strip('-')
 
+_DATE_HIT = re.search(r'(20\d{2})[-_. ]?(0[1-9]|1[0-2])[-_. ]?(0[1-9]|[12]\d|3[01])', EPISODE_TITLE_RAW)
+if _DATE_HIT:
+    EPISODE_DATE = f"{_DATE_HIT.group(1)}-{_DATE_HIT.group(2)}-{_DATE_HIT.group(3)}"
+else:
+    from datetime import datetime, timezone
+    EPISODE_DATE = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+
+def _slug_filename_part(text, maxlen=80):
+    clean = re.sub(r'[^a-z0-9]+', '-', str(text or "").lower()).strip('-')
+    if len(clean) > maxlen:
+        clean = clean[:maxlen].rstrip('-')
+    return clean
+
+def clip_filename(index, podcast=PODCAST_SLUG, date=EPISODE_DATE, title=EPISODE_SLUG, suffix=".mp4"):
+    podcast_s = _slug_filename_part(podcast, 30)
+    title_s = _slug_filename_part(title, 60)
+    base = f"{podcast_s}_{date}_{title_s}_{int(index):02d}"
+    if len(base) > 180:
+        title_s = _slug_filename_part(title, max(10, 180 - (len(podcast_s) + len(date) + 10)))
+        base = f"{podcast_s}_{date}_{title_s}_{int(index):02d}"
+    return base + suffix
+
 with open(WORK_DIR / "transcript.json") as f:
     segs = json.load(f)
 
@@ -136,11 +158,15 @@ episode_summary = data.get("episode_summary", "")
 x_post = data.get("x_post", {})
 clips = data.get("clips", [])
 
+for i, c in enumerate(clips, 1):
+    c["filename"] = clip_filename(i, suffix=".mp4")
+
 # Build episode_data.json
 episode_data = {
     "podcast_slug": PODCAST_SLUG,
     "episode_slug": EPISODE_SLUG,
     "episode_title": EPISODE_TITLE_RAW,
+    "episode_date": EPISODE_DATE,
     "episode_summary": episode_summary,
     "x_post": x_post,
     "clips": clips,
