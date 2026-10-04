@@ -179,6 +179,8 @@ class AdminPageTests(unittest.TestCase):
         workdir.mkdir(parents=True)
         (workdir / "source.mp4").write_bytes(b"source")
         (workdir / "transcript.json").write_text("[]", encoding="utf-8")
+        (workdir / "clips").mkdir()
+        (workdir / "clips" / "top5_compilation.mp4").write_bytes(b"old preview")
         payload = {
             "csrf_token": self.csrf(),
             "episode_id": "episode-one",
@@ -192,7 +194,13 @@ class AdminPageTests(unittest.TestCase):
         }
         with patch.object(admin_routes, "WORK_ROOT", work_root), patch.object(admin_routes.subprocess, "Popen") as worker:
             response = self.client.post("/admin/compilation/build", json=payload)
+            duplicate = self.client.post("/admin/compilation/build", json=payload)
+            status = self.client.get("/admin/compilation/status/episode-one")
+            preview = self.client.get("/admin/compilation/preview/episode-one")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(duplicate.status_code, 409)
+        self.assertEqual(status.get_json()["status"], "running")
+        self.assertEqual(preview.status_code, 409)
         config_files = list(workdir.glob(".compilation-*.json"))
         self.assertEqual(len(config_files), 1)
         config = json.loads(config_files[0].read_text())
@@ -211,8 +219,11 @@ class AdminPageTests(unittest.TestCase):
         (output / "top5_compilation.mp4").write_bytes(b"fake mp4")
         with patch.object(admin_routes, "WORK_ROOT", work_root):
             response = self.client.get("/admin/compilation/preview/episode-one")
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.mimetype, "video/mp4")
+        try:
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.mimetype, "video/mp4")
+        finally:
+            response.close()
 
     def test_compilation_segments_returns_transcript_candidates(self):
         import app.routes.admin as admin_routes
@@ -356,6 +367,55 @@ class AdminPageTests(unittest.TestCase):
         response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload")
         self.assertEqual(response.status_code, 400)
 
+    def test_clip_upload_does_not_duplicate_an_upload_in_progress(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        clip_path = Path(self.tempdir.name) / "clip01.mp4"
+        clip_path.write_bytes(b"video")
+        caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Caption"}
+        with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "get_youtube_upload", return_value={"status": "uploading"}), \
+             patch("scripts.youtube_upload.upload_clip") as upload:
+            response = self.client.post(
+                "/admin/clips/bocor-alus/episode-one/1/upload",
+                data={"csrf_token": self.csrf()},
+            )
+        self.assertEqual(response.status_code, 302)
+        upload.assert_not_called()
+
+    def test_upload_claim_is_atomic_and_retryable_after_failure(self):
+        from app.admin_store import claim_youtube_upload, record_youtube_upload
+
+        claimed, previous = claim_youtube_upload("bocor-alus", "episode-one", "1")
+        self.assertTrue(claimed)
+        self.assertIsNone(previous)
+        claimed_again, current = claim_youtube_upload("bocor-alus", "episode-one", "1")
+        self.assertFalse(claimed_again)
+        self.assertEqual(current["status"], "uploading")
+
+        record_youtube_upload(
+            "bocor-alus", "episode-one", "1", "failed", error="temporary failure"
+        )
+        retry_claimed, previous = claim_youtube_upload("bocor-alus", "episode-one", "1")
+        self.assertTrue(retry_claimed)
+        self.assertEqual(previous["status"], "failed")
+
+    def test_failed_upload_remains_visible_for_retry(self):
+        import app.routes.admin as admin_routes
+
+        self.login()
+        clip = {
+            "podcast": "bocor-alus", "episode": "episode-one", "clip_num": "1",
+            "title": "Retry this clip", "manual": None,
+            "upload": {"status": "failed", "error": "network error", "video_id": None},
+        }
+        with patch.object(admin_routes, "_deployed_clips", return_value=[clip]):
+            response = self.client.get("/admin")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"Retry this clip", response.data)
+        self.assertIn(b"network error", response.data)
+
     def test_process_action_starts_worker_and_marks_submission_in_progress(self):
         from app.admin_store import list_submissions
         self.login()
@@ -373,14 +433,14 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(list_submissions()[0]["status"], "in_progress")
         worker.assert_called_once()
 
-    def test_episode_worker_marks_submission_completed(self):
+    def test_episode_worker_marks_submission_ready_for_review(self):
         from app.admin_store import add_submission, list_submissions
         from scripts.process_episode import main as process_episode
         video_id = add_submission("https://youtu.be/abcdefghijk", "jelasin-dong", "Test episode")
         with patch("scripts.process_episode.subprocess.run", return_value=Mock(returncode=0)) as runner:
             with patch("sys.argv", ["process_episode.py", video_id]):
                 self.assertEqual(process_episode(), 0)
-        self.assertEqual(list_submissions()[0]["status"], "completed")
+        self.assertEqual(list_submissions()[0]["status"], "ready_for_review")
         self.assertEqual(runner.call_args.args[0][1], str(Path(__file__).resolve().parent / "run_one_episode.py"))
 
     def test_episode_worker_marks_nonzero_run_failed(self):
@@ -391,6 +451,22 @@ class AdminPageTests(unittest.TestCase):
             with patch("sys.argv", ["process_episode.py", video_id]):
                 self.assertEqual(process_episode(), 1)
         self.assertEqual(list_submissions()[0]["status"], "failed")
+
+    def test_submission_error_details_are_returned_and_rendered(self):
+        from app.admin_store import add_submission, list_submissions, set_submission_status
+
+        video_id = add_submission(
+            "https://youtu.be/abcdefghijk", "jelasin-dong", "Broken episode"
+        )
+        set_submission_status(video_id, "failed", "ffmpeg failed on clip 3")
+        row = list_submissions()[0]
+        self.assertEqual(row["error_message"], "ffmpeg failed on clip 3")
+        self.assertTrue(row["last_error_at"])
+
+        self.login()
+        response = self.client.get("/admin")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"ffmpeg failed on clip 3", response.data)
 
     def test_submission_requires_csrf_and_login(self):
         data = {"url": "https://youtu.be/abcdefghijk", "podcast": "jelasin-dong"}

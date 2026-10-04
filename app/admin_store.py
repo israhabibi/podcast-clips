@@ -11,6 +11,9 @@ from urllib.parse import parse_qs, urlsplit
 
 
 PODCASTS = ("jelasin-dong", "bocor-alus", "tukang-kupas")
+SUBMISSION_STATUSES = (
+    "pending", "in_progress", "ready_for_review", "completed", "failed"
+)
 VIDEO_ID = re.compile(r"^[A-Za-z0-9_-]{11}$")
 REPO_DIR = Path(__file__).resolve().parents[1]
 YOUTUBE_CLIPS_ROOT = REPO_DIR / "app" / "static" / "clips"
@@ -150,13 +153,14 @@ def add_submission(url, podcast, title=""):
 
 
 def list_submissions(status=None, limit=None):
-    if status is not None and status not in ("pending", "in_progress", "completed", "failed"):
+    if status is not None and status not in SUBMISSION_STATUSES:
         raise ValueError("Invalid queue status.")
     if limit is not None and (not isinstance(limit, int) or limit < 1):
         raise ValueError("Queue limit must be a positive integer.")
     connection = _connect()
     try:
-        query = ("SELECT id, video_id, podcast, url, title, status, created_at "
+        query = ("SELECT id, video_id, podcast, url, title, status, created_at, "
+                 "error_message, last_error_at "
                  "FROM youtube_submissions")
         params = []
         if status:
@@ -196,7 +200,11 @@ def record_youtube_upload(podcast, episode, clip_num, status, video_id=None, err
                    ON CONFLICT(podcast, episode, clip_num) DO UPDATE SET
                    video_id=COALESCE(excluded.video_id, youtube_uploads.video_id),
                    status=excluded.status,
-                   error=CASE WHEN excluded.error='' THEN youtube_uploads.error ELSE excluded.error END,
+                   error=CASE
+                       WHEN excluded.error<>'' THEN excluded.error
+                       WHEN excluded.status IN ('uploading', 'uploaded', 'manual') THEN ''
+                       ELSE youtube_uploads.error
+                   END,
                    created_at=excluded.created_at,
                    reviewed_at=excluded.reviewed_at,
                    reviewed_by=excluded.reviewed_by,
@@ -205,6 +213,50 @@ def record_youtube_upload(podcast, episode, clip_num, status, video_id=None, err
                 (podcast, episode, str(clip_num), video_id, status, error[:500], now,
                  reviewed_at, (reviewed_by or "")[:80], (sha256 or "")[:64], int(file_size or 0)),
             )
+    finally:
+        connection.close()
+
+
+def claim_youtube_upload(podcast, episode, clip_num, sha256="", file_size=0):
+    """Atomically reserve one clip for upload.
+
+    Returns ``(True, previous_record)`` when claimed. Existing uploaded,
+    manual, or uploading records return ``(False, record)`` so concurrent
+    requests cannot publish the same file twice.
+    """
+    if podcast not in PODCASTS or not episode or not str(clip_num).isdigit():
+        raise ValueError("Invalid upload identity.")
+    now = datetime.now(timezone.utc).isoformat()
+    identity = (podcast, episode, str(clip_num))
+    connection = _connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT podcast, episode, clip_num, video_id, status, error, created_at, "
+            "reviewed_at, reviewed_by, sha256, file_size FROM youtube_uploads "
+            "WHERE podcast = ? AND episode = ? AND clip_num = ?",
+            identity,
+        ).fetchone()
+        existing = dict(row) if row else None
+        if existing and existing["status"] in ("uploading", "uploaded", "manual"):
+            connection.rollback()
+            return False, existing
+        connection.execute(
+            """INSERT INTO youtube_uploads
+               (podcast, episode, clip_num, video_id, status, error, created_at,
+                reviewed_at, reviewed_by, sha256, file_size)
+               VALUES (?, ?, ?, NULL, 'uploading', '', ?, '', '', ?, ?)
+               ON CONFLICT(podcast, episode, clip_num) DO UPDATE SET
+               video_id=NULL, status='uploading', error='', created_at=excluded.created_at,
+               reviewed_at='', reviewed_by='', sha256=excluded.sha256,
+               file_size=excluded.file_size""",
+            (*identity, now, (sha256 or "")[:64], int(file_size or 0)),
+        )
+        connection.commit()
+        return True, existing
+    except Exception:
+        connection.rollback()
+        raise
     finally:
         connection.close()
 
@@ -307,7 +359,7 @@ def get_youtube_upload(podcast, episode, clip_num):
 
 
 def set_submission_status(video_id, status, error_message=None):
-    if not VIDEO_ID.fullmatch(video_id) or status not in ("pending", "in_progress", "completed", "failed"):
+    if not VIDEO_ID.fullmatch(video_id) or status not in SUBMISSION_STATUSES:
         raise ValueError("Invalid video ID or queue status.")
     connection = _connect()
     now = datetime.now(timezone.utc).isoformat()

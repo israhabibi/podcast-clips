@@ -243,36 +243,91 @@ def upload_clip(video_path, title, description, tags=None, category_id='25'):
         result["metadata_update_failed"] = True
     return result
 
-if __name__ == '__main__':
+def load_captions():
+    if WORK_DIR is None:
+        raise ValueError("Set PODCAST_WORK_DIR, e.g. PODCAST_WORK_DIR=/tmp/podcast-clips/episode-id")
+    try:
+        with open(CAPTIONS_FILE, encoding="utf-8") as captions_file:
+            captions = json.load(captions_file)
+    except OSError as exc:
+        raise ValueError(f"Cannot read captions file: {exc}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid captions JSON: {exc}") from exc
+    if not isinstance(captions, dict):
+        raise ValueError("Captions JSON must contain an object keyed by clip number.")
+    return captions
+
+
+def main(args=None):
+    args = sys.argv[1:] if args is None else args
     if WORK_DIR is None:
         print("ERROR: Set PODCAST_WORK_DIR, e.g. PODCAST_WORK_DIR=/tmp/podcast-clips/episode-id")
-        sys.exit(1)
-    if len(sys.argv) < 2:
+        return 1
+    if not args:
         print("Usage: python youtube_upload.py <clip_num>")
         print("       python youtube_upload.py all")
-        sys.exit(1)
+        return 1
     
     if not os.path.exists(TOKEN_FILE):
         print("ERROR: Belum OAuth. Buka https://clips.gcp.my.id/auth")
-        sys.exit(1)
-    
-    with open(CAPTIONS_FILE) as f:
-        caps = json.load(f)
-    
-    if sys.argv[1] == 'all':
+        return 1
+
+    try:
+        caps = load_captions()
+    except ValueError as exc:
+        print(f"ERROR: {exc}")
+        return 1
+
+    if args[0] == 'all':
+        failed = False
         for idx in sorted(caps.keys(), key=int):
-            clip_file = os.path.join(CLIPS_DIR, caps[idx]['clip'])
-            if os.path.exists(clip_file):
-                r = upload_clip(clip_file, caps[idx]['title'], caps[idx]['caption'])
-                print(f"  ✅ {r['url']}" if 'url' in r else f"  ❌ {r['error']}")
+            item = caps[idx]
+            if not isinstance(item, dict) or not isinstance(item.get("clip"), str):
+                print(f"  ❌ {idx}. Invalid caption entry")
+                failed = True
+                continue
+            clip_name = item["clip"]
+            if Path(clip_name).name != clip_name:
+                print(f"  ❌ {idx}. Invalid clip filename")
+                failed = True
+                continue
+            clip_file = os.path.join(CLIPS_DIR, clip_name)
+            if not os.path.isfile(clip_file):
+                print(f"  ❌ {idx}. Clip file not found: {clip_file}")
+                failed = True
+                continue
+            r = upload_clip(clip_file, str(item.get('title', f'Clip {idx}')), str(item.get('caption', '')))
+            if 'url' in r:
+                print(f"  ✅ {r['url']}")
+            else:
+                print(f"  ❌ {r.get('error', 'Unknown upload error')}")
+                failed = True
+        return 1 if failed else 0
     else:
-        idx = sys.argv[1]
+        idx = args[0]
         if idx not in caps:
             print(f"Clip {idx} not found")
-            sys.exit(1)
-        clip_file = os.path.join(CLIPS_DIR, caps[idx]['clip'])
-        r = upload_clip(clip_file, caps[idx]['title'], caps[idx]['caption'])
+            return 1
+        item = caps[idx]
+        if not isinstance(item, dict) or not isinstance(item.get("clip"), str):
+            print(f"Invalid caption entry for clip {idx}")
+            return 1
+        clip_name = item["clip"]
+        if Path(clip_name).name != clip_name:
+            print(f"Invalid clip filename for clip {idx}")
+            return 1
+        clip_file = os.path.join(CLIPS_DIR, clip_name)
+        if not os.path.isfile(clip_file):
+            print(f"Clip file not found: {clip_file}")
+            return 1
+        r = upload_clip(clip_file, str(item.get('title', f'Clip {idx}')), str(item.get('caption', '')))
         if 'url' in r:
             print(f"✅ {r['url']}")
+            return 0
         else:
-            print(f"❌ {r['error']}")
+            print(f"❌ {r.get('error', 'Unknown upload error')}")
+            return 1
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

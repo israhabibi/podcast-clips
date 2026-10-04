@@ -36,7 +36,7 @@ def upload_clip(video_path, caption, idx):
             "total_chunk_count": 1
         }
     }
-    r = requests.post(init_url, json=init_body, headers=headers)
+    r = requests.post(init_url, json=init_body, headers=headers, timeout=30)
     if r.status_code != 200:
         return {"error": f"Init failed: {r.status_code} {r.text}"}
     init_data = r.json()
@@ -46,13 +46,14 @@ def upload_clip(video_path, caption, idx):
         return {"error": f"No upload_url: {init_data}"}
 
     # 2. Upload file
-    with open(video_path, "rb") as f:
-        video_data = f.read()
     upload_headers = {
         "Content-Type": "video/mp4",
         "Content-Range": f"bytes 0-{video_size-1}/{video_size}"
     }
-    r = requests.put(upload_url, data=video_data, headers=upload_headers)
+    with open(video_path, "rb") as video_file:
+        r = requests.put(
+            upload_url, data=video_file, headers=upload_headers, timeout=(10, 300)
+        )
     if r.status_code not in (200, 201, 206):
         return {"error": f"Upload failed: {r.status_code} {r.text}"}
 
@@ -73,7 +74,7 @@ def upload_clip(video_path, caption, idx):
         "brand_content_toggle": False,
         "brand_organic_toggle": False,
     }
-    r = requests.post(post_url, json=post_body, headers=headers)
+    r = requests.post(post_url, json=post_body, headers=headers, timeout=30)
     if r.status_code != 200:
         return {"error": f"Post failed: {r.status_code} {r.text}"}
     
@@ -121,14 +122,17 @@ def main(args=None):
         return 1
 
     if args[0] == 'all':
+        failed = False
         for idx in sorted(caps.keys(), key=int):
             clip_file = CLIPS_DIR / caps[idx]['clip']
             cap_text = caps[idx]['caption'].strip()
             r = upload_clip(clip_file, cap_text, idx)
             if 'error' in r:
+                failed = True
                 print(f"  ❌ {idx}. {r['error']}")
             else:
                 print(f"  ✅ {idx}. {caps[idx]['title']} — {r['status']}")
+        return 1 if failed else 0
     else:
         idx = args[0]
         if idx not in caps:
@@ -138,9 +142,10 @@ def main(args=None):
         r = upload_clip(CLIPS_DIR / caps[idx]['clip'], cap_text, idx)
         if 'error' in r:
             print(f"❌ {r['error']}")
+            return 1
         else:
             print(f"✅ {r['message']}")
-    return 0
+        return 0
 
 if __name__ == '__main__':
     raise SystemExit(main())

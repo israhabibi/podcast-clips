@@ -2,7 +2,7 @@
 """TOP 5 v3: persistent 2-line header 'TOP 5 MOMEN BOCOR ALUS / PRABOWO GIBRAN' + numbered list sidebar,
 active item highlighted yellow, per-segment subtitles."""
 import argparse
-import json, subprocess, os
+import json, subprocess, os, re
 
 DEFAULT_WORKDIR = "/tmp/podcast-clips/bocor-alus-jokow-prabowo-2029-scenarios"
 DEFAULT_OUT = "clips/top5_compilation_v3.mp4"
@@ -18,7 +18,8 @@ OUT = os.path.abspath(args.output or os.path.join(D, DEFAULT_OUT))
 FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
 WHOOSH = "/usr/share/sounds/sound-icons/pisk-up.wav"
 DING = "/usr/share/sounds/sound-icons/cembalo-12.wav"
-TMP = os.path.join(D, ".top5v3")
+job_part = re.sub(r"[^A-Za-z0-9_.-]+", "-", os.path.basename(OUT))[:120]
+TMP = os.path.join(D, f".top5v3-{job_part}")
 os.makedirs(TMP, exist_ok=True)
 os.makedirs(os.path.dirname(OUT), exist_ok=True)
 
