@@ -232,7 +232,7 @@ class AdminPageTests(unittest.TestCase):
 
     def test_admin_page_has_direct_compilation_preview_link(self):
         self.login()
-        response = self.client.get("/admin")
+        response = self.client.get("/admin/top5")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"compilation-preview-link", response.data)
         self.assertIn(b"Buka di tab baru", response.data)
@@ -246,11 +246,12 @@ class AdminPageTests(unittest.TestCase):
         workdir.mkdir(parents=True)
         (workdir / "source.mp4").write_bytes(b"source")
         (workdir / "transcript.json").write_text(json.dumps([
-            {"start": 0, "end": 40, "text": "Momen pertama"},
+            {"start": 0, "end": 14, "text": "Momen pertama"},
         ]), encoding="utf-8")
         llm_payload = json.dumps({"choices": [{"message": {"content": json.dumps([
-            {"start": 0, "end": 40, "title": "Valid", "reason": "Payoff"},
-            {"start": 1, "end": 10, "title": "Too short", "reason": "Skip"},
+            {"start": 0, "end": 11, "title": "Valid", "reason": "Punchline kencang."},
+            {"start": 3, "end": 5, "title": "Terlalu pendek", "reason": "Skip <6s"},
+            {"start": 0, "end": 30, "title": "Terlalu panjang", "reason": "Skip >14s"},
         ])}}]}).encode()
         response_mock = Mock()
         response_mock.__enter__ = Mock(return_value=response_mock)
@@ -263,8 +264,12 @@ class AdminPageTests(unittest.TestCase):
                 "csrf_token": self.csrf(), "episode_id": "episode-one",
             })
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(len(response.get_json()["candidates"]), 1)
-        self.assertEqual(response.get_json()["candidates"][0]["title"], "Valid")
+        data = response.get_json()
+        self.assertEqual(len(data["candidates"]), 1, f"Expected 1 valid candidate, got titles: {[c['title'] for c in data['candidates']]}")
+        self.assertEqual(data["candidates"][0]["title"], "Valid")
+        self.assertEqual(data.get("per_item_min"), 6)
+        self.assertEqual(data.get("per_item_max"), 14)
+        self.assertEqual(data.get("max_total_duration"), 60)
 
     def test_compilation_moments_limits_long_transcript_prompt(self):
         import app.routes.admin as admin_routes

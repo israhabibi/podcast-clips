@@ -20,7 +20,8 @@ from app.admin_store import (
     PODCASTS, add_submission, clear_login_attempts, login_blocked,
     recent_submissions, record_failed_login, set_submission_status,
     record_youtube_upload, get_youtube_upload, record_manual_upload,
-    deployed_clip_metadata,
+    deployed_clip_metadata, get_setting, set_setting, delete_setting,
+    get_llm_config, save_llm_config,
 )
 from app.youtube_metadata import MetadataLookupError, get_youtube_video_metadata
 from app.config import (
@@ -39,6 +40,86 @@ JOB_STAGES = {
 DEFAULT_PER_PAGE = 10
 ALLOWED_PER_PAGE = (5, 10, 25, 50, 100)
 UI_SELECT_PER_PAGE = (10, 25, 50, 100)
+
+_TOKEN_CHECK_CACHE = {"ts": 0.0, "youtube_valid": None, "youtube_token_seen": None}
+_TOKEN_CHECK_CACHE_TTL_SECONDS = 90
+
+
+def _try_check_youtube_token_valid():
+    """Non-blocking sanity check: coba refresh credentials YouTube.
+
+    Returns tuple (bool_valid, status_msg_short). Tidak throw — gagal network/tidak terpasang lib
+    diabaikan agar admin page tidak crash 500 karena network buruk.
+
+    Hasil di-cache selama TTL supaya admin page GET berikutnya tidak nembak Google terus.
+    """
+    token_path = Path(YOUTUBE_TOKEN_FILE) if YOUTUBE_TOKEN_FILE else None
+    if not (token_path and token_path.exists()):
+        return False, "no_token"
+
+    global _TOKEN_CHECK_CACHE
+    now_ts = time.time()
+    last_check = _TOKEN_CHECK_CACHE["ts"] or 0.0
+    if last_check and (now_ts - last_check) <= _TOKEN_CHECK_CACHE_TTL_SECONDS:
+        seen_cached = _TOKEN_CHECK_CACHE["youtube_token_seen"]
+        if seen_cached and token_path.stat().st_mtime < last_check:
+            # File tidak berubah sejak cek terakhir, aman reuse cache.
+            return bool(_TOKEN_CHECK_CACHE["youtube_valid"]), "cached"
+
+    # Quick check by stat: pastikan bukan 0 byte / JSON kosong (yang jelas invalid).
+    try:
+        stat = token_path.stat()
+        if stat.st_size <= 8:
+            _TOKEN_CHECK_CACHE.update({"ts": now_ts, "youtube_valid": False, "youtube_token_seen": str(token_path)})
+            return False, "token_empty"
+    except OSError:
+        return False, "stat_error"
+
+    try:
+        try:
+            from google.oauth2.credentials import Credentials
+            from google.auth.transport.requests import Request as GoogleRequest
+        except Exception:
+            return True, "skip_no_libs"  # Tidak bisa cek, anggap OK agar tidak bikin banner salah
+        try:
+            creds = Credentials.from_authorized_user_file(
+                str(token_path), ["https://www.googleapis.com/auth/youtube"]
+            )
+        except (OSError, ValueError):
+            _TOKEN_CHECK_CACHE.update({"ts": now_ts, "youtube_valid": False, "youtube_token_seen": str(token_path)})
+            return False, "token_unreadable"
+        if not creds.valid:
+            if creds.expired and creds.refresh_token:
+                try:
+                    creds.refresh(GoogleRequest())
+                except Exception as exc:
+                    hay = f"{type(exc).__name__} {str(exc)}".lower()
+                    invalid = ("invalid_grant" in hay or "expired or revoked" in hay
+                               or "revoked" in hay or "refresh_token" in hay and "invalid" in hay)
+                    try:
+                        for a in getattr(exc, "args", []) or []:
+                            if isinstance(a, str) and ("invalid_grant" in a or "expired or revoked" in a.lower()):
+                                invalid = True
+                    except Exception:
+                        pass
+                    if invalid:
+                        # Auto-wipe invalid cached token agar button reconnect muncul.
+                        try:
+                            token_path.unlink()
+                        except OSError:
+                            pass
+                        _TOKEN_CHECK_CACHE.update({"ts": now_ts, "youtube_valid": False, "youtube_token_seen": str(token_path)})
+                        return False, "invalid_grant"
+                    # Network error / auth error lain: anggap valid-tidak-bisa-dicek, jangan ganggu UI.
+                    _TOKEN_CHECK_CACHE.update({"ts": now_ts, "youtube_valid": True, "youtube_token_seen": str(token_path)})
+                    return True, "refresh_error_unclassified"
+            else:
+                return True, "no_refresh_token_present"
+        # Cek cepat selesai, credential tetap VALID.
+        _TOKEN_CHECK_CACHE.update({"ts": now_ts, "youtube_valid": True, "youtube_token_seen": str(token_path)})
+        return True, "valid"
+    except Exception:
+        return True, "check_error_skipped"  # jangan ganggu halaman admin kalau ada error tak terduga
 
 
 def _coerce_int(raw, default, minimum=1):
@@ -307,6 +388,109 @@ def _compilation_workdir(episode_id):
     return workdir
 
 
+TOP5_CLIP_NUM = "99"  # Reserved clip_num slot for Top 5 compilation
+
+
+def _episode_meta_from_workdir(workdir):
+    """Return dict with podcast_slug, episode_date, episode_title, episode_slug.
+
+    Baca dari episode_data.json (kaya). Fallback parse dari workdir name atau waktu sekarang.
+    """
+    if workdir is None:
+        return None
+    podcast = "unknown"
+    date_str = time.strftime("%Y-%m-%d", time.gmtime(time.time()))
+    title = workdir.name
+    slug = re.sub(r"[^a-z0-9]+", "-", str(title).lower()).strip("-") or "episode"
+    episode_data = workdir / "episode_data.json"
+    if episode_data.is_file():
+        try:
+            meta = json.loads(episode_data.read_text(encoding="utf-8"))
+            if isinstance(meta.get("podcast_slug"), str) and meta["podcast_slug"].strip():
+                podcast = meta["podcast_slug"].strip()
+            if isinstance(meta.get("episode_title"), str) and meta["episode_title"].strip():
+                title = meta["episode_title"].strip()
+            if isinstance(meta.get("episode_slug"), str) and meta["episode_slug"].strip():
+                slug = meta["episode_slug"].strip()
+            if isinstance(meta.get("episode_date"), str) and meta["episode_date"].strip():
+                date_str = meta["episode_date"].strip()
+        except (OSError, json.JSONDecodeError):
+            pass
+    if podcast not in PODCASTS:
+        # Fallback: coba infer dari nama workdir
+        for allowed in PODCASTS:
+            if allowed in workdir.name.lower():
+                podcast = allowed
+                break
+    return {
+        "podcast": podcast if podcast in PODCASTS else list(PODCASTS)[0] if PODCASTS else "unknown",
+        "date": date_str,
+        "title": title,
+        "slug": slug,
+    }
+
+
+def _slug_filename_part(text, maxlen=80):
+    clean = re.sub(r"[^a-z0-9]+", "-", str(text or "").lower()).strip("-")
+    if len(clean) > maxlen:
+        clean = clean[:maxlen].rstrip("-")
+    return clean
+
+
+def _top5_filename(meta, suffix=".mp4"):
+    """Nama file deploy untuk kompilasi Top 5: {podcast}_{date}_{slug}_top5.mp4
+
+    Clip number top5 di-representasi sebagai "top5" literal di filename supaya
+    mudah dibedakan dari per-klip NN. YouTube upload registration pakai TOP5_CLIP_NUM=99.
+    """
+    podcast_s = _slug_filename_part(meta["podcast"], 30)
+    title_s = _slug_filename_part(meta["slug"], 60)
+    base = f"{podcast_s}_{meta['date']}_{title_s}_top5"
+    if len(base) > 180:
+        title_s = _slug_filename_part(meta["slug"], max(10, 180 - (len(podcast_s) + len(meta["date"]) + 10)))
+        base = f"{podcast_s}_{meta['date']}_{title_s}_top5"
+    return base + suffix
+
+
+def _top5_deployed_dir_and_file(meta):
+    """Return tuple (deployed_episode_dir: Path, deployed_file_path: Path) in static clips."""
+    podcast = meta["podcast"] if meta["podcast"] in PODCASTS else "unknown"
+    episode_folder = f"{meta['date']}_{_slug_filename_part(meta['slug'], 80)}"
+    deploy_dir = REPO_ROOT / "app" / "static" / "clips" / podcast / episode_folder
+    filename = _top5_filename(meta)
+    return deploy_dir, deploy_dir / filename
+
+
+def _compilation_preview_path(episode_id):
+    workdir = _compilation_workdir(episode_id)
+    return workdir / "clips" / "top5_compilation.mp4" if workdir else None
+
+
+def _compilation_deployed_path(episode_id, workdir=None):
+    if workdir is None:
+        workdir = _compilation_workdir(episode_id)
+    if workdir is None:
+        return None
+    meta = _episode_meta_from_workdir(workdir)
+    if not meta:
+        return None
+    _, dest = _top5_deployed_dir_and_file(meta)
+    return dest if dest.is_file() else None
+
+
+def _compilation_upload_status(episode_id, workdir=None):
+    if workdir is None:
+        workdir = _compilation_workdir(episode_id)
+    if workdir is None:
+        return None
+    meta = _episode_meta_from_workdir(workdir)
+    if not meta:
+        return None
+    podcast = meta["podcast"]
+    episode_folder = f"{meta['date']}_{_slug_filename_part(meta['slug'], 80)}"
+    return get_youtube_upload(podcast, episode_folder, TOP5_CLIP_NUM)
+
+
 def _deployed_clip(podcast, episode, clip_num):
     if podcast not in PODCASTS or Path(episode).name != episode or not str(clip_num).isdigit():
         return None
@@ -395,16 +579,18 @@ def _fallback_compilation_moments(transcript, limit=10):
         try:
             start = float(transcript[index]["start"])
             end_index = index
-            while end_index + 1 < len(transcript) and float(transcript[end_index]["end"]) - start < 45:
+            # Fallback kompilasi top5: 8-12 detik per item, total max 60.
+            while end_index + 1 < len(transcript) and float(transcript[end_index]["end"]) - start < 10:
                 end_index += 1
             end = float(transcript[end_index]["end"])
-            if 35 <= end - start <= 75:
+            if 6 <= end - start <= 14:
                 text = str(transcript[index].get("text", "")).strip()
                 candidates.append({
                     "start": start,
                     "end": end,
+                    "duration": round(end - start, 1),
                     "title": text[:60] or f"Moment {len(candidates) + 1}",
-                    "reason": "Kandidat otomatis dari rentang transcript; review sebelum build.",
+                    "reason": "Kandidat otomatis dari transcript; review durasi dan punchline sebelum build.",
                 })
                 index = end_index + 1
             else:
@@ -470,7 +656,13 @@ def admin_page():
     sub_page = _coerce_int(request.args.get("sub_page"), 1)
     sub_per_page = _coerce_int(request.args.get("sub_per_page"), DEFAULT_PER_PAGE)
 
-    all_clips = _deployed_clips()
+    all_clips_full = _deployed_clips()
+    # Hanya TAMPILKAN di panel "Klip YouTube siap upload" klip yang BELUM PERNAH ada record upload di youtube_uploads (barang baru, belum diapa-apakan).
+    # Klip yang sudah pernah di-upload / gagal upload / quota habis / in-progress semua disembunyikan dari panel ini;
+    # user bisa melihat historynya di section Pengajuan terbaru.
+    all_clips = [c for c in all_clips_full if c.get("upload") is None]
+    total_deployed_clips_count = len(all_clips_full)
+    hidden_already_uploaded = total_deployed_clips_count - len(all_clips)
     clips_base_args = {
         "sub_page": sub_page if sub_page != 1 else None,
         "sub_per_page": sub_per_page if sub_per_page != DEFAULT_PER_PAGE else None,
@@ -505,9 +697,21 @@ def admin_page():
     sub_pager["other_per_val"] = clips_per_page
     sub_pager["total_items_flat"] = len(all_subs)
 
+    youtube_connected_file = os.path.exists(YOUTUBE_TOKEN_FILE)
+    yt_token_valid, yt_check_status = True, "skip_no_check"
+    if youtube_connected_file:
+        try:
+            yt_token_valid, yt_check_status = _try_check_youtube_token_valid()
+        except Exception:
+            yt_token_valid, yt_check_status = True, "check_exception_ignored"
+    youtube_token_expired = youtube_connected_file and (not yt_token_valid)
+    youtube_connected_display = bool(youtube_connected_file and yt_token_valid)
+    llm_cfg = get_llm_config(include_key=False)
+
     return render_template(
         "admin.html",
         csrf_token=csrf_token(),
+        active_tab="dashboard",
         podcasts=PODCASTS,
         submissions=sub_pager["items"],
         submissions_pager=sub_pager,
@@ -516,9 +720,102 @@ def admin_page():
         clips_pager=clips_pager,
         youtube_ready=bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET),
         tiktok_ready=bool(TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET),
-        youtube_connected=os.path.exists(YOUTUBE_TOKEN_FILE),
+        youtube_connected=youtube_connected_display,
+        youtube_token_expired=youtube_token_expired,
+        youtube_token_check_status=str(yt_check_status),
         tiktok_connected=os.path.exists(TIKTOK_TOKEN_FILE),
+        llm_config=llm_cfg,
+        hidden_already_uploaded=hidden_already_uploaded,
+        total_deployed_clips=total_deployed_clips_count,
     )
+
+
+@app.route("/admin/top5")
+@admin_required()
+def admin_top5():
+    """Dedicated halaman admin tab untuk Top 5 Kompilasi build/review/preview."""
+    youtube_connected_file = os.path.exists(YOUTUBE_TOKEN_FILE)
+    yt_token_valid, yt_check_status = True, "skip_no_check"
+    if youtube_connected_file:
+        try:
+            yt_token_valid, yt_check_status = _try_check_youtube_token_valid()
+        except Exception:
+            yt_token_valid, yt_check_status = True, "check_exception_ignored"
+    youtube_token_expired = youtube_connected_file and (not yt_token_valid)
+    youtube_connected_display = bool(youtube_connected_file and yt_token_valid)
+    llm_cfg = get_llm_config(include_key=False)
+
+    return render_template(
+        "admin.html",
+        csrf_token=csrf_token(),
+        active_tab="top5",
+        podcasts=PODCASTS,
+        compilation_episodes=_compilation_episodes(),
+        youtube_ready=bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET),
+        tiktok_ready=bool(TIKTOK_CLIENT_KEY and TIKTOK_CLIENT_SECRET),
+        youtube_connected=youtube_connected_display,
+        youtube_token_expired=youtube_token_expired,
+        youtube_token_check_status=str(yt_check_status),
+        tiktok_connected=os.path.exists(TIKTOK_TOKEN_FILE),
+        llm_config=llm_cfg,
+    )
+
+
+@app.route("/admin/llm-config", methods=["GET"])
+@admin_required()
+def admin_llm_config_get():
+    """Return JSON LLM config (masked key) buat AJAX live check / refresh state card."""
+    accept_json = (request.is_json or
+                   request.accept_mimetypes.accept_json or
+                   request.headers.get("X-Requested-With") == "XMLHttpRequest")
+    if accept_json:
+        return jsonify(**get_llm_config(include_key=False))
+    # Falls Bukan AJAX → redirect to /admin (page render llm_config card via Jinja)
+    return redirect(url_for("admin_page"))
+
+
+@app.route("/admin/llm-config/save", methods=["POST"])
+@admin_required()
+def admin_llm_config_save():
+    """Save LLM konfigurasi (api_key, base_url, model). Bisa JSON POST atau form POST."""
+    payload = request.get_json(silent=True) if request.is_json else None
+    payload = payload if isinstance(payload, dict) else None
+    if payload is None:
+        payload = request.form.to_dict()
+    submitted_csrf = str(payload.get("csrf_token", "") if isinstance(payload, dict) else request.form.get("csrf_token", "") or "")
+    expected_csrf = str(session.get("admin_csrf", "") or "")
+    if not submitted_csrf or not expected_csrf or not secrets.compare_digest(expected_csrf, submitted_csrf):
+        return jsonify(error="Invalid form token."), 400
+
+    api_key = str(payload.get("llm_api_key", "") or "").strip()
+    base_url = str(payload.get("llm_base_url", "") or "").strip() if "llm_base_url" in payload else None
+    model   = str(payload.get("llm_model", "") or "").strip()   if "llm_model"   in payload else None
+    accept_json = (request.is_json or
+                   request.accept_mimetypes.accept_json or
+                   request.headers.get("X-Requested-With") == "XMLHttpRequest")
+    clear_key = str(payload.get("llm_api_key_clear", "") or "")
+    if clear_key.lower() in ("1", "true", "yes", "on"):
+        api_key = ""
+        # Delete setting (wipe DB stored key, if any)
+        delete_setting("llm_api_key")
+    try:
+        if base_url is None and model is None and "llm_api_key" in payload:
+            # Only key change (but validation handled in save_llm_config)
+            cfg = save_llm_config(api_key=api_key)
+        elif not (base_url is None and model is None and "llm_api_key" not in payload):
+            cfg = save_llm_config(api_key=api_key, base_url=base_url, model=model)
+        else:
+            cfg = save_llm_config(api_key=api_key)
+    except ValueError as exc:
+        msg = str(exc)
+        if accept_json:
+            return jsonify(error=msg), 400
+        flash(msg, "error")
+        return redirect(url_for("admin_page"))
+    if accept_json:
+        return jsonify(ok=True, config=cfg)
+    flash(f"LLM config tersimpan. Sumber: {cfg.get('configured_from','?')}", "success")
+    return redirect(url_for("admin_page"))
 
 
 @app.route("/admin/jobs")
@@ -581,9 +878,14 @@ def admin_compilation_moments():
     workdir = _compilation_workdir(payload.get("episode_id"))
     if workdir is None:
         return jsonify(error="Episode workspace not found."), 404
-    api_key = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
+    llm_cfg = get_llm_config(include_key=True)
+    api_key = str(llm_cfg.get("api_key") or "").strip()
+    base_url = str(llm_cfg.get("base_url") or "").strip()
+    model = str(llm_cfg.get("model") or "").strip() or "MiniMax-M2.7-highspeed"
+    cfg_source = llm_cfg.get("configured_from") or "none"
     if not api_key:
-        return jsonify(error="LLM API key is not configured on the server."), 503
+        return jsonify(error=f"LLM API key belum dikonfigurasi (sumber={cfg_source}). "
+                             "Silahkan save dulu di halaman admin bagian 'Konfigurasi LLM'."), 503
     try:
         transcript = json.loads((workdir / "transcript.json").read_text(encoding="utf-8"))
         transcript_lines = [
@@ -598,18 +900,34 @@ def admin_compilation_moments():
             sampled_lines = transcript_lines[::step]
             transcript_text = "\n".join(sampled_lines)[:max_prompt_chars]
         prompt = (
-            "Pilih maksimal 10 momen punchline dari transkrip podcast Indonesia berikut untuk kompilasi TOP 5. "
-            "Kembalikan HANYA JSON array berisi objek start, end, title, reason. "
-            "Start/end harus tepat pada batas segmen, durasi 35-75 detik, jangan mengarang konteks.\n\n"
+            "Pilih 5-10 KANDIDAT moment TERBAIK dari transkrip podcast Indonesia berikut "
+            "untuk KOMPILASI TOP 5 SHORTS (TOTAL DURASI MAKSIMAL 60 DETIK, jadi SETIAP MOMEN HANYA 6-14 DETIK SAJA).\n"
+            "KRITERIA PEMILIHAN (URUT BERDAMPAK TINGGI KE RENDAH):\n"
+            "  1. Punchline terkuat, kalimat closing berani, satir tajam, joke lucu ter-epic, reaksi kaget/kejengkelan host.\n"
+            "  2. Argumen utama / inti perbincangan (setting konteks 2-3 kalimat sebelum + punchline).\n"
+            "  3. Naratif emosi, provokasi sehat, opini viral, tawa penonton riuh (energy burst).\n"
+            "  4. JANGAN pilih bagian perkenalan biasa, basa-basi, iklan, jeda, mengulang topik, atau cross-talk tanpa inti.\n"
+            "  5. Setiap moment MANDIRI (jangan pecah satu topik jadi dua), start/end TEPAT di kalimat UTUH (tidak potong tengah kalimat).\n\n"
+            "DURASI WAJIB:\n"
+            "  - Per item: MIN 6s · MAKS 14s (ideal 9-12s)\n"
+            "  - JUMLAHKAN SEMUA 5 ITEM NANTI TIDAK BOLEH > 60 DETIK.\n\n"
+            "Keluaran HANYA JSON array (tanpa markdown ```, tanpa komentar) berisi objek:\n"
+            "  start  <number>  detik mulai (harus TEPAT sama dengan salah satu segment.start di bawah)\n"
+            "  end    <number>  detik selesai (harus TEPAT sama dengan segment.end, durasi end-start antara 6-14 detik)\n"
+            "  title  <string>  label momen MAX 60 karakter (judul punchline / inti)\n"
+            "  reason <string>  ALASAN kenapa dipilih MAX 160 karakter: sebutkan tipe (punchline/opening/argumen/emosi/viral) dan dampaknya.\n"
+            "URUTKAN array dari TERBAIK dulu (paling berdampak / paling bagus jadi TOP #1, turun sampai TOP #5+).\n\n"
+            "JANGAN mengarang teks di luar transcript. Jangan ambil segment panjang; 12 detik sudah cukup untuk 1 punchline.\n\n"
+            "--- TRANSKRIP ---\n"
             + transcript_text
         )
         request_body = json.dumps({
-            "model": "MiniMax-M2.7-highspeed",
+            "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.2,
         }).encode()
         llm_request = urllib.request.Request(
-            "https://ai.sumopod.com/v1/chat/completions",
+            base_url,
             data=request_body,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
         )
@@ -620,15 +938,18 @@ def admin_compilation_moments():
         for candidate in candidates[:10]:
             start = float(candidate["start"])
             end = float(candidate["end"])
-            if start < 0 or end <= start or end - start < 35 or end - start > 75:
+            if start < 0 or end <= start or end - start < 6 or end - start > 14:
                 continue
             normalized.append({
                 "start": start,
                 "end": end,
+                "duration": round(end - start, 1),
                 "title": str(candidate.get("title", "Moment"))[:60],
                 "reason": str(candidate.get("reason", ""))[:160],
             })
-        return jsonify(candidates=normalized)
+        return jsonify(candidates=normalized, source=f"llm:{cfg_source}",
+                       model_used=model, endpoint=base_url,
+                       max_total_duration=60, per_item_min=6, per_item_max=14)
     except TimeoutError:
         fallback = _fallback_compilation_moments(transcript)
         return jsonify(candidates=fallback, source="transcript-fallback", warning="LLM timeout; kandidat dibuat dari transcript.")
@@ -650,16 +971,48 @@ def admin_compilation_build():
     if workdir is None or not isinstance(items, list) or len(items) != 5:
         return jsonify(error="Choose an episode and exactly five moments."), 400
     try:
+        MAX_TOTAL_DURATION = 60.0
+        PER_ITEM_MIN = 6.0
+        PER_ITEM_MAX = 14.0
         normalized_items = []
         segments = []
+        total_dur = 0.0
+        per_item_durations = []
         for index, item in enumerate(items):
             start = float(item["start"])
             end = float(item["end"])
             label = str(item.get("label", "")).strip()[:60]
             if not label or start < 0 or end <= start:
                 raise ValueError
+            dur = end - start
+            if dur < PER_ITEM_MIN:
+                return jsonify(error=f"Momen #{index+1} terlalu pendek ({dur:.1f}s); minimal {PER_ITEM_MIN:.0f}s."), 400
+            if dur > PER_ITEM_MAX:
+                return jsonify(error=f"Momen #{index+1} terlalu panjang ({dur:.1f}s); maksimal {PER_ITEM_MAX:.0f}s."), 400
+            total_dur += dur
+            per_item_durations.append(dur)
             normalized_items.append({"label": label})
             segments.append([start, end, index])
+        auto_warning = None
+        if total_dur > MAX_TOTAL_DURATION:
+            # Auto-truncate dari yang TERAKHIR di urutan (item index terbesar) kurangi end-nya supaya total tepat 60s.
+            overflow = total_dur - MAX_TOTAL_DURATION
+            idx = len(items) - 1
+            while overflow > 1e-6 and idx >= 0:
+                s_start, s_end_old, s_i = segments[idx]
+                old_dur = per_item_durations[idx]
+                # Kurangi item ini sebanyak overflow, tapi tetap jaga >= PER_ITEM_MIN
+                new_dur = max(PER_ITEM_MIN, old_dur - overflow)
+                reduced = old_dur - new_dur
+                overflow -= reduced
+                per_item_durations[idx] = new_dur
+                segments[idx] = [s_start, s_start + new_dur, s_i]
+                idx -= 1
+            total_dur = sum(per_item_durations)
+            auto_warning = (
+                f"Total durasi melebihi {MAX_TOTAL_DURATION:.0f}s; auto-truncate momen terakhir menjadi total {total_dur:.1f}s. "
+                f"Review kembali kualitas potongan sebelum deploy permanen / upload."
+            )
     except (KeyError, TypeError, ValueError):
         return jsonify(error="Each moment needs valid start, end, and label values."), 400
 
@@ -672,6 +1025,8 @@ def admin_compilation_build():
         "subheader": str(payload.get("subheader", ""))[:120],
         "items": normalized_items,
         "segs": segments,
+        "auto_warning": auto_warning,
+        "total_duration_seconds": round(total_dur, 2),
     }, ensure_ascii=False), encoding="utf-8")
     log_dir = Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs"))
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -683,7 +1038,9 @@ def admin_compilation_build():
                          env={**os.environ, "PYTHONUNBUFFERED": "1"})
     except OSError:
         return jsonify(error="Could not start compilation worker."), 503
-    return jsonify(job_id=job_id, output=f"/admin/compilation/preview/{workdir.name}")
+    return jsonify(job_id=job_id, output=f"/admin/compilation/preview/{workdir.name}",
+                   total_duration_seconds=round(total_dur, 2),
+                   auto_warning=auto_warning)
 
 
 @app.route("/admin/compilation/preview/<episode_id>")
@@ -713,15 +1070,365 @@ def admin_compilation_status(episode_id):
     if workdir is None:
         return jsonify(status="invalid"), 404
     output_path = workdir / "clips" / "top5_compilation.mp4"
+    deployed_path = _compilation_deployed_path(episode_id, workdir=workdir)
+    upload_info = _compilation_upload_status(episode_id, workdir=workdir)
+    base = {}
+    if deployed_path is not None:
+        base["deployed"] = True
+        base["deployed_file"] = deployed_path.name
+        podcast_dir = deployed_path.parent.parent.name
+        episode_dir = deployed_path.parent.name
+        base["static_url"] = url_for(
+            "static",
+            filename=f"clips/{podcast_dir}/{episode_dir}/{deployed_path.name}",
+        )
+    else:
+        base["deployed"] = False
+    if upload_info is not None:
+        base["upload_status"] = upload_info.get("status")
+        base["upload_video_id"] = upload_info.get("video_id")
+        base["upload_error"] = upload_info.get("error")
+        if upload_info.get("video_id"):
+            base["upload_url"] = f"https://youtube.com/watch?v={upload_info['video_id']}"
+    else:
+        base["upload_status"] = None
     if output_path.is_file():
-        return jsonify(status="completed", preview=url_for("admin_compilation_preview", episode_id=episode_id))
+        base["status"] = "completed"
+        base["preview"] = url_for("admin_compilation_preview", episode_id=episode_id)
+        return jsonify(**base)
     log_files = sorted(Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs")).glob(f"compilation-{episode_id}-*.log"))
     if log_files:
         log_text = log_files[-1].read_text(encoding="utf-8", errors="replace")
         if "EXIT_CODE=" in log_text and not log_text.rstrip().endswith("EXIT_CODE=0"):
-            return jsonify(status="failed")
-        return jsonify(status="running")
-    return jsonify(status="idle")
+            base["status"] = "failed"
+            return jsonify(**base)
+        base["status"] = "running"
+        return jsonify(**base)
+    base["status"] = "idle"
+    return jsonify(**base)
+
+
+def _deploy_compilation(episode_id):
+    workdir = _compilation_workdir(episode_id)
+    if workdir is None:
+        return None, "Workspace episode tidak valid."
+    src = workdir / "clips" / "top5_compilation.mp4"
+    if not src.is_file():
+        return None, "Kompilasi belum di-render (file top5_compilation.mp4 tidak ada di workspace)."
+    meta = _episode_meta_from_workdir(workdir)
+    if not meta:
+        return None, "Metadata episode tidak bisa dibaca."
+    deploy_dir, dest = _top5_deployed_dir_and_file(meta)
+    try:
+        deploy_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        return None, f"Gagal buat folder deploy: {exc}"
+
+    import hashlib
+    import shutil
+    import tempfile
+
+    # Tulisan atomic: copy ke .tmp, lalu os.replace (per project convention hard constraint).
+    tmp_fd, tmp_path = tempfile.mkstemp(prefix=".top5deploy-", suffix=".tmp.mp4", dir=str(deploy_dir))
+    try:
+        with os.fdopen(tmp_fd, "wb") as out:
+            with src.open("rb") as inp:
+                shutil.copyfileobj(inp, out, length=1024 * 1024)
+        os.replace(tmp_path, dest)
+    except Exception as exc:
+        try:
+            if os.path.exists(tmp_path):
+                os.unlink(tmp_path)
+        except OSError:
+            pass
+        return None, f"Gagal menulis file deploy: {exc}"
+
+    # Tulis companion .metadata.json
+    try:
+        stat = dest.stat()
+        h = hashlib.sha256()
+        with dest.open("rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                h.update(chunk)
+        sha = h.hexdigest()
+        compile_cfg = None
+        # Coba baca config build terakhir untuk ambil header/items
+        for cfg in sorted(workdir.glob(".compilation-*.json"), reverse=True):
+            try:
+                compile_cfg = json.loads(cfg.read_text(encoding="utf-8"))
+                break
+            except (OSError, json.JSONDecodeError):
+                continue
+        title_suffix = ""
+        description_lines = []
+        if compile_cfg:
+            h1 = str(compile_cfg.get("header_l1") or "TOP 5 MOMEN").strip()
+            h2 = str(compile_cfg.get("header_l2") or meta["podcast"].upper()).strip()
+            sub = str(compile_cfg.get("subheader") or meta["title"]).strip()
+            title_suffix = f"{h1} — {meta['title']}"
+            description_lines.append(f"{h1} {h2}")
+            description_lines.append(sub)
+            items_raw = compile_cfg.get("items") or []
+            if isinstance(items_raw, list):
+                for i, it in enumerate(items_raw, 1):
+                    if isinstance(it, dict):
+                        label = it.get("label")
+                    else:
+                        label = it
+                    if label:
+                        description_lines.append(f"{i}. {label}")
+        if not title_suffix:
+            title_suffix = f"TOP 5 KOMPILASI — {meta['title']}"
+        description = "\n".join(description_lines).strip() or f"Top 5 kompilasi terbaik dari episode {meta['title']}"
+        metadata_json = {
+            "podcast_slug": meta["podcast"],
+            "episode_date": meta["date"],
+            "episode_slug": meta["slug"],
+            "episode_title": meta["title"],
+            "clip_num": TOP5_CLIP_NUM,
+            "video_filename": dest.name,
+            "title": title_suffix[:200],
+            "description": description,
+            "tags": ["shorts", "podcast", "indonesia", meta["podcast"], "tempo",
+                     "berita", "politik", "viral", "fyp", "news", "video",
+                     "opini", "analisis", "terkini", "podcastindonesia",
+                     "top5", "kompilasi", "top5kompilasi"],
+            "tags_csv": ",".join(["shorts", "podcast", "indonesia", meta["podcast"], "tempo",
+                                  "berita", "politik", "viral", "fyp", "news", "video",
+                                  "opini", "analisis", "terkini", "podcastindonesia",
+                                  "top5", "kompilasi"]),
+            "sha256": sha,
+            "file_size": stat.st_size,
+            "file_size_mb": round(stat.st_size / (1024 * 1024), 2),
+            "compilation": True,
+        }
+        meta_file = dest.with_suffix(dest.suffix + ".metadata.json")
+        tmp_fd2, tmp_meta_path = tempfile.mkstemp(prefix=".top5meta-", suffix=".tmp.json", dir=str(deploy_dir))
+        try:
+            with os.fdopen(tmp_fd2, "w", encoding="utf-8") as out:
+                json.dump(metadata_json, out, ensure_ascii=False, indent=2)
+            os.replace(tmp_meta_path, meta_file)
+        except Exception as exc:
+            try:
+                if os.path.exists(tmp_meta_path):
+                    os.unlink(tmp_meta_path)
+            except OSError:
+                pass
+            return (dest, meta), f"File tersimpan tapi gagal tulis metadata companion: {exc}"
+    except OSError as exc:
+        return (dest, meta), f"File tersimpan tapi gagal hitung hash/metadata: {exc}"
+
+    # Simpan juga episode_data.json copy ke deploy dir for consistency
+    try:
+        src_ep = workdir / "episode_data.json"
+        if src_ep.is_file() and not (deploy_dir / "episode_data.json").is_file():
+            shutil.copy2(src_ep, deploy_dir / "episode_data.json")
+    except OSError:
+        pass
+
+    return (dest, meta), None  # (ok, error)
+
+
+@app.route("/admin/compilation/deploy/<episode_id>", methods=["POST"])
+@admin_required()
+def admin_compilation_deploy(episode_id):
+    payload = request.get_json(silent=True) or {}
+    submitted_csrf = payload.get("csrf_token", "") if isinstance(payload, dict) else ""
+    if not submitted_csrf:
+        submitted_csrf = request.form.get("csrf_token", "")
+    expected_csrf = session.get("admin_csrf", "")
+    if not expected_csrf or not isinstance(submitted_csrf, str) or not secrets.compare_digest(expected_csrf, submitted_csrf):
+        return jsonify(error="Invalid form token."), 400
+    result, err = _deploy_compilation(episode_id)
+    accept_json = (request.is_json or
+                   request.accept_mimetypes.accept_json or
+                   request.headers.get("X-Requested-With") == "XMLHttpRequest")
+    if result is None:
+        if accept_json:
+            return jsonify(error=err or "Deploy gagal."), 500
+        flash(f"Deploy gagal: {err or 'tidak diketahui.'}", "error")
+        return redirect(url_for("admin_top5") if request.referrer and "top5" in request.referrer else url_for("admin_page"))
+    dest, meta = result
+    podcast_dir = dest.parent.parent.name
+    episode_dir = dest.parent.name
+    static_url = url_for("static", filename=f"clips/{podcast_dir}/{episode_dir}/{dest.name}")
+    if accept_json:
+        return jsonify(ok=True, deployed_file=dest.name, static_url=static_url,
+                       podcast=meta["podcast"], episode_title=meta["title"],
+                       warning=err)
+    flash(f"Deploy berhasil: {dest.name} — " + (f"catatan: {err}" if err else "tersimpan permanen."),
+          "error" if err else "success")
+    return redirect(url_for("admin_top5"))
+
+
+@app.route("/admin/compilation/upload/<episode_id>", methods=["POST"])
+@admin_required()
+def admin_compilation_upload(episode_id):
+    payload = request.get_json(silent=True) or {}
+    submitted_csrf = payload.get("csrf_token", "") if isinstance(payload, dict) else ""
+    if not submitted_csrf:
+        submitted_csrf = request.form.get("csrf_token", "")
+    expected_csrf = session.get("admin_csrf", "")
+    if not expected_csrf or not isinstance(submitted_csrf, str) or not secrets.compare_digest(expected_csrf, submitted_csrf):
+        return jsonify(error="Invalid form token."), 400
+    workdir = _compilation_workdir(episode_id)
+    if workdir is None:
+        return jsonify(error="Workspace episode tidak valid."), 404
+    deployed = _compilation_deployed_path(episode_id, workdir=workdir)
+    if deployed is None:
+        # Deploy otomatis dulu jika belum permanen
+        result, err_deploy = _deploy_compilation(episode_id)
+        if result is None:
+            msg = f"Belum bisa upload: deploy permanen gagal duluan — {err_deploy or 'error tidak diketahui'}"
+            accept_json = (request.is_json or
+                           request.accept_mimetypes.accept_json or
+                           request.headers.get("X-Requested-With") == "XMLHttpRequest")
+            if accept_json:
+                return jsonify(error=msg), 500
+            flash(msg, "error")
+            return redirect(url_for("admin_top5"))
+        deployed, meta = result
+    else:
+        meta = _episode_meta_from_workdir(workdir)
+    # Load metadata companion untuk title/description/tags, fallback build dari meta
+    podcast_dir = deployed.parent.parent.name
+    episode_folder = deployed.parent.name
+    existing = get_youtube_upload(meta["podcast"], episode_folder, TOP5_CLIP_NUM)
+    accept_json = (request.is_json or
+                   request.accept_mimetypes.accept_json or
+                   request.headers.get("X-Requested-With") == "XMLHttpRequest")
+    if existing and existing.get("status") in ("uploaded", "manual"):
+        vid = existing.get("video_id") or ""
+        if accept_json:
+            return jsonify(ok=True, already_uploaded=True, status=existing["status"],
+                           video_id=vid, url=f"https://youtube.com/watch?v={vid}")
+        flash(f"Top 5 sudah di-upload ({existing['status']}): {vid}", "success")
+        return redirect(url_for("admin_top5"))
+    if existing and existing.get("status") == "uploading":
+        msg = "Upload sedang berjalan untuk episode ini — tunggu sebentar atau refresh status."
+        if accept_json:
+            return jsonify(ok=False, already_uploaded=False, status="uploading",
+                           in_progress=True, error=msg), 409
+        flash(msg, "error")
+        return redirect(url_for("admin_top5"))
+    # Baca companion atau fallback default
+    meta_file = deployed.with_suffix(deployed.suffix + ".metadata.json")
+    caption_title = f"TOP 5 KOMPILASI — {meta['title']}"
+    caption_desc = f"Top 5 momen terbaik episode {meta['title']}"
+    tags = ["shorts", "podcast", "indonesia", meta["podcast"], "tempo",
+            "berita", "politik", "viral", "fyp", "news", "video",
+            "opini", "analisis", "terkini", "podcastindonesia",
+            "top5", "kompilasi"]
+    if meta_file.is_file():
+        try:
+            companion = json.loads(meta_file.read_text(encoding="utf-8"))
+            caption_title = companion.get("title") or caption_title
+            caption_desc = companion.get("description") or caption_desc
+            if isinstance(companion.get("tags"), list):
+                tags = list(companion["tags"])
+        except (OSError, json.JSONDecodeError):
+            pass
+    clip_meta = deployed_clip_metadata(
+        meta["podcast"], episode_folder, TOP5_CLIP_NUM,
+        caption={"title": caption_title, "caption": caption_desc, "clip": deployed.name,
+                 "compilation": True},
+        clip_path=deployed,
+    ) or {}
+    record_youtube_upload(
+        meta["podcast"], episode_folder, TOP5_CLIP_NUM, "uploading",
+        sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
+    )
+    try:
+        from scripts.youtube_upload import upload_clip
+        result = upload_clip(str(deployed), caption_title, caption_desc.strip(), tags=tags)
+        def finalize_ok(flash_msg, flash_cat="success", extra_warn=None):
+            record_youtube_upload(
+                meta["podcast"], episode_folder, TOP5_CLIP_NUM, "uploaded",
+                video_id=result.get("video_id"),
+                sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
+                error=extra_warn or "",
+            )
+            if accept_json:
+                return jsonify(ok=True, uploaded=True,
+                               status="uploaded",
+                               video_id=result.get("video_id"),
+                               url=result.get("url"),
+                               title=result.get("title"),
+                               warning=extra_warn or result.get("warning"))
+            flash(flash_msg, flash_cat)
+            return redirect(url_for("admin_top5"))
+        if "error" in result:
+            message = result["error"]
+            is_invalid_grant = (bool(result.get("invalid_grant")) or
+                                "expired or dicabut" in message or
+                                "invalid_grant" in message)
+            partial_success = bool(result.get("partial_success")) and bool(result.get("video_id"))
+            if partial_success:
+                return finalize_ok(
+                    f"Upload BERHASIL ({result.get('video_id','')}) tapi: {message}",
+                    "error",
+                    extra_warn=message[:500],
+                )
+            try:
+                if is_invalid_grant and os.path.exists(YOUTUBE_TOKEN_FILE):
+                    os.remove(YOUTUBE_TOKEN_FILE)
+            except OSError:
+                pass
+            status = "failed"
+            err_msg = message
+            if is_invalid_grant:
+                err_msg = ("⚠️ Token YouTube KADALUARSA atau DICABUT. "
+                           "Klik HUBUNGKAN YOUTUBE di 'Koneksi akun upload' untuk reconnect dulu.")
+            elif "uploadLimitExceeded" in message:
+                status = "quota"
+                err_msg = "Kuota upload harian habis — retry besok."
+            record_youtube_upload(
+                meta["podcast"], episode_folder, TOP5_CLIP_NUM, status,
+                error=err_msg[:500],
+                sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
+            )
+            if accept_json:
+                return jsonify(error=err_msg, status=status, invalid_grant=is_invalid_grant), 502
+            flash(err_msg, "error")
+            return redirect(url_for("admin_top5"))
+        # Sukses tanpa error (mungkin ada warning metadata)
+        warning_msg = result.get("warning")
+        url = result.get("url", f"https://youtube.com/watch?v={result.get('video_id','')}")
+        msg = f"Upload berhasil: {url}"
+        cat = "success"
+        if warning_msg:
+            msg = f"Upload berhasil: {url} (catatan: {warning_msg})"
+            cat = "error"
+        return finalize_ok(msg, cat, extra_warn=warning_msg)
+    except Exception as exc:
+        message = str(exc)
+        is_invalid_grant = ("invalid_grant" in message or
+                            "expired or revoked" in message.lower() or
+                            "expired or dicabut" in message)
+        if is_invalid_grant:
+            try:
+                if os.path.exists(YOUTUBE_TOKEN_FILE):
+                    os.remove(YOUTUBE_TOKEN_FILE)
+            except OSError:
+                pass
+            err_msg = ("⚠️ Token YouTube KADALUARSA atau DICABUT. "
+                       "Klik HUBUNGKAN YOUTUBE di 'Koneksi akun upload' untuk reconnect dulu.")
+            status = "failed"
+        else:
+            status = "quota" if "uploadLimitExceeded" in message else "failed"
+            err_msg = "Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}"
+        record_youtube_upload(
+            meta["podcast"], episode_folder, TOP5_CLIP_NUM, status,
+            error=err_msg[:500],
+            sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
+        )
+        if accept_json:
+            return jsonify(error=err_msg, status=status, invalid_grant=is_invalid_grant), 502
+        flash(err_msg, "error")
+        return redirect(url_for("admin_top5"))
 
 
 @app.route("/admin/clips/<podcast>/<episode>/<clip_num>/upload", methods=["POST"])
@@ -750,20 +1457,82 @@ def admin_upload_clip(podcast, episode, clip_num):
         result = upload_clip(clip_path, caption.get("title", f"Clip {clip_num}"), caption.get("caption", "").strip(), tags=tags)
         if "error" in result:
             message = result["error"]
-            status = "quota" if "uploadLimitExceeded" in message else "failed"
-            record_youtube_upload(podcast, episode, clip_num, status, error=message,
-                                  sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
-            flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
+            is_invalid_grant = bool(result.get("invalid_grant")) or "expired or dicabut" in message or "invalid_grant" in message
+            partial_success = bool(result.get("partial_success")) and bool(result.get("video_id"))
+            if partial_success:
+                # Video SUCCESSFULLY uploaded (we have video_id), token or metadata step had an error.
+                # Record as UPLOADED — don't mark a live video as "failed".
+                record_youtube_upload(podcast, episode, clip_num, "uploaded",
+                                      video_id=result.get("video_id"),
+                                      sha256=meta.get("sha256", ""),
+                                      file_size=meta.get("file_size", 0),
+                                      error=message)
+                if is_invalid_grant:
+                    try:
+                        if os.path.exists(YOUTUBE_TOKEN_FILE):
+                            os.remove(YOUTUBE_TOKEN_FILE)
+                    except OSError:
+                        pass
+                    flash(
+                        f"⚠️ Upload BERHASIL ({result.get('video_id','')}) tapi token YouTube KADALUARSA/DICABUT. "
+                        f"Klik HUBUNGKAN YOUTUBE di 'Koneksi akun upload' untuk reconnect sebelum upload berikutnya.",
+                        "error",
+                    )
+                else:
+                    flash(f"Upload BERHASIL ({result.get('url', result.get('video_id',''))}) tapi ada masalah metadata: {message}",
+                          "error")
+            elif is_invalid_grant:
+                # Token invalid_grant dihapus sama upload_clip, kasih tahu user reconnect via button
+                try:
+                    if os.path.exists(YOUTUBE_TOKEN_FILE):
+                        os.remove(YOUTUBE_TOKEN_FILE)
+                except OSError:
+                    pass
+                status = "failed"
+                flash(
+                    "⚠️ Token YouTube KADALUARSA atau DICABUT. Klik HUBUNGKAN YOUTUBE di bagian 'Koneksi akun upload' untuk reconnect dulu — baru upload ulang.",
+                    "error",
+                )
+                record_youtube_upload(podcast, episode, clip_num, status, error=message,
+                                      sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
+            elif "uploadLimitExceeded" in message:
+                status = "quota"
+                flash("Kuota upload harian habis — retry besok.", "error")
+                record_youtube_upload(podcast, episode, clip_num, status, error=message,
+                                      sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
+            else:
+                status = "failed"
+                flash(f"Upload gagal: {message}", "error")
+                record_youtube_upload(podcast, episode, clip_num, status, error=message,
+                                      sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
         else:
+            # Clean success, possibly with a metadata warning.
             record_youtube_upload(podcast, episode, clip_num, "uploaded", video_id=result.get("video_id"),
                                   sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
-            flash(f"Upload berhasil: {result.get('url', result.get('video_id', ''))}", "success")
+            warning_msg = result.get("warning")
+            if warning_msg:
+                flash(f"Upload berhasil: {result.get('url', result.get('video_id', ''))} (catatan: {warning_msg})", "error")
+            else:
+                flash(f"Upload berhasil: {result.get('url', result.get('video_id', ''))}", "success")
     except Exception as exc:
         message = str(exc)
-        status = "quota" if "uploadLimitExceeded" in message else "failed"
+        is_invalid_grant = ("invalid_grant" in message) or ("expired or revoked" in message.lower()) or ("expired or dicabut" in message)
+        if is_invalid_grant:
+            try:
+                if os.path.exists(YOUTUBE_TOKEN_FILE):
+                    os.remove(YOUTUBE_TOKEN_FILE)
+            except OSError:
+                pass
+            flash(
+                "⚠️ Token YouTube KADALUARSA atau DICABUT. Klik HUBUNGKAN YOUTUBE di 'Koneksi akun upload' untuk reconnect dulu — baru upload ulang.",
+                "error",
+            )
+            status = "failed"
+        else:
+            status = "quota" if "uploadLimitExceeded" in message else "failed"
+            flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
         record_youtube_upload(podcast, episode, clip_num, status, error=message,
                               sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
-        flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
     return redirect(url_for("admin_page"))
 
 
