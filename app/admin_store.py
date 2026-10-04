@@ -54,16 +54,24 @@ def parse_youtube_url(value):
 
 def _ensure_columns(connection):
     """Backfill new/upgrade-safe upgrade: add reviewed_at, reviewed_by, sha256, file_size columns if missing."""
-    existing = {row["name"] for row in connection.execute("PRAGMA table_info(youtube_uploads)").fetchall()}
-    additions = [
+    existing_up = {row["name"] for row in connection.execute("PRAGMA table_info(youtube_uploads)").fetchall()}
+    additions_up = [
         ("reviewed_at", "TEXT NOT NULL DEFAULT ''"),
         ("reviewed_by", "TEXT NOT NULL DEFAULT ''"),
         ("sha256", "TEXT NOT NULL DEFAULT ''"),
         ("file_size", "INTEGER NOT NULL DEFAULT 0"),
     ]
-    for col_name, col_def in additions:
-        if col_name not in existing:
+    for col_name, col_def in additions_up:
+        if col_name not in existing_up:
             connection.execute(f"ALTER TABLE youtube_uploads ADD COLUMN {col_name} {col_def}")
+    existing_sub = {row["name"] for row in connection.execute("PRAGMA table_info(youtube_submissions)").fetchall()}
+    additions_sub = [
+        ("error_message", "TEXT NOT NULL DEFAULT ''"),
+        ("last_error_at", "TEXT NOT NULL DEFAULT ''"),
+    ]
+    for col_name, col_def in additions_sub:
+        if col_name not in existing_sub:
+            connection.execute(f"ALTER TABLE youtube_submissions ADD COLUMN {col_name} {col_def}")
 
 
 def _connect():
@@ -102,6 +110,13 @@ def _connect():
             error TEXT NOT NULL DEFAULT '',
             created_at TEXT NOT NULL,
             UNIQUE(podcast, episode, clip_num)
+        )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS admin_settings (
+            key TEXT PRIMARY KEY,
+            value TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL
         )"""
     )
     _ensure_columns(connection)
@@ -291,15 +306,25 @@ def get_youtube_upload(podcast, episode, clip_num):
     return dict(row) if row else None
 
 
-def set_submission_status(video_id, status):
+def set_submission_status(video_id, status, error_message=None):
     if not VIDEO_ID.fullmatch(video_id) or status not in ("pending", "in_progress", "completed", "failed"):
         raise ValueError("Invalid video ID or queue status.")
     connection = _connect()
+    now = datetime.now(timezone.utc).isoformat()
     try:
         with connection:
-            changed = connection.execute(
-                "UPDATE youtube_submissions SET status = ? WHERE video_id = ?", (status, video_id)
-            ).rowcount
+            if error_message is None:
+                changed = connection.execute(
+                    "UPDATE youtube_submissions SET status = ? WHERE video_id = ?", (status, video_id)
+                ).rowcount
+            else:
+                err_safe = str(error_message or "")
+                if len(err_safe) > 2000:
+                    err_safe = err_safe[:1990] + "…(truncated)"
+                changed = connection.execute(
+                    "UPDATE youtube_submissions SET status = ?, error_message = ?, last_error_at = ? WHERE video_id = ?",
+                    (status, err_safe, now, video_id),
+                ).rowcount
     finally:
         connection.close()
     if not changed:
@@ -346,3 +371,115 @@ def clear_login_attempts(client_key):
             connection.execute("DELETE FROM admin_login_attempts WHERE client_key = ?", (client_key,))
     finally:
         connection.close()
+
+
+def get_setting(key, default=None):
+    if not isinstance(key, str) or not key:
+        return default
+    connection = _connect()
+    try:
+        row = connection.execute(
+            "SELECT value FROM admin_settings WHERE key = ?", (key,)
+        ).fetchone()
+    finally:
+        connection.close()
+    return row["value"] if row is not None else default
+
+
+def set_setting(key, value):
+    if not isinstance(key, str) or not key:
+        raise ValueError("Setting key cannot be empty.")
+    now = datetime.now(timezone.utc).isoformat()
+    connection = _connect()
+    try:
+        with connection:
+            connection.execute(
+                """INSERT INTO admin_settings (key, value, updated_at) VALUES (?, ?, ?)
+                   ON CONFLICT(key) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at""",
+                (key, str(value or ""), now),
+            )
+    finally:
+        connection.close()
+
+
+def delete_setting(key):
+    if not isinstance(key, str) or not key:
+        return
+    connection = _connect()
+    try:
+        with connection:
+            connection.execute("DELETE FROM admin_settings WHERE key = ?", (key,))
+    finally:
+        connection.close()
+
+
+# -- LLM config helpers ------------------------------------------------------
+LLM_SETTING_KEYS = ("llm_api_key", "llm_base_url", "llm_model")
+LLM_DEFAULT_BASE_URL = "https://ai.sumopod.com/v1/chat/completions"
+LLM_DEFAULT_MODEL = "MiniMax-M2.7-highspeed"
+
+
+def get_llm_config(include_key=True):
+    """Return dict with keys api_key, base_url, model, configured_from. configured_from akan memberitahu:
+       'stored' (dari DB admin_settings), 'env' (baca environment variable HERMES...), 'none' (belum dikonfigurasi)."""
+    stored_key   = get_setting("llm_api_key", "") or ""
+    stored_url  = get_setting("llm_base_url", "") or ""
+    stored_model = get_setting("llm_model", "") or ""
+    if stored_key:
+        result = {
+            "api_key": stored_key if include_key else _mask_key(stored_key),
+            "base_url": stored_url or LLM_DEFAULT_BASE_URL,
+            "model": stored_model or LLM_DEFAULT_MODEL,
+            "configured_from": "stored",
+        }
+        return result
+    env_key = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "") or ""
+    if env_key:
+        return {
+            "api_key": env_key if include_key else _mask_key(env_key),
+            "base_url": os.environ.get("LLM_BASE_URL", "") or LLM_DEFAULT_BASE_URL,
+            "model": os.environ.get("LLM_MODEL", "") or LLM_DEFAULT_MODEL,
+            "configured_from": "env",
+        }
+    return {
+        "api_key": "",
+        "base_url": LLM_DEFAULT_BASE_URL,
+        "model": LLM_DEFAULT_MODEL,
+        "configured_from": "none",
+    }
+
+
+def _mask_key(key):
+    if not isinstance(key, str) or len(key) < 10:
+        return ""
+    return key[:4] + ("*" * max(6, len(key) - 8)) + key[-4:]
+
+
+def save_llm_config(api_key="", base_url=None, model=None):
+    """Simpan konfigurasi LLM ke admin_settings. Validasi: api_key min 8 chars, base_url mulai https/http, model non-empty."""
+    api_key = (api_key or "").strip()
+    if api_key and len(api_key) < 8:
+        raise ValueError("API key terlalu pendek (minimal 8 karakter).")
+    if api_key:
+        set_setting("llm_api_key", api_key)
+    else:
+        delete_setting("llm_api_key")
+    if base_url is not None:
+        base_url = str(base_url).strip()
+        if not base_url:
+            delete_setting("llm_base_url")
+        elif not (base_url.startswith("https://") or base_url.startswith("http://")):
+            raise ValueError("Base URL harus dimulai https:// atau http://.")
+        elif len(base_url) > 500:
+            raise ValueError("Base URL terlalu panjang (maks 500 karakter).")
+        else:
+            set_setting("llm_base_url", base_url)
+    if model is not None:
+        model = str(model).strip()
+        if not model:
+            delete_setting("llm_model")
+        elif len(model) > 120:
+            raise ValueError("Nama model terlalu panjang (maks 120 karakter).")
+        else:
+            set_setting("llm_model", model)
+    return get_llm_config(include_key=False)

@@ -104,6 +104,78 @@
             margin-top: 2px;
         }
         .top-actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+
+        /* Admin tab bar (below brand topbar) */
+        .admin-tabs {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            padding: 4px;
+            background: var(--bg-elev);
+            border: 1px solid var(--border);
+            border-radius: 14px;
+            margin: -8px 0 22px;
+            box-shadow: var(--shadow-sm);
+            overflow-x: auto;
+            flex-wrap: nowrap;
+        }
+        .admin-tabs .tab-btn {
+            appearance: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 10px 16px;
+            border-radius: 10px;
+            border: 1px solid transparent;
+            background: transparent;
+            color: var(--text-dim);
+            font-size: 0.88rem;
+            font-weight: 600;
+            letter-spacing: 0.01em;
+            cursor: pointer;
+            transition: background .16s ease, color .16s ease, border-color .16s ease, transform .06s ease;
+            white-space: nowrap;
+            text-decoration: none;
+            flex-shrink: 0;
+        }
+        .admin-tabs .tab-btn:hover {
+            color: var(--text);
+            background: rgba(99, 102, 241, .08);
+            border-color: rgba(99, 102, 241, .2);
+        }
+        .admin-tabs .tab-btn:active {
+            transform: translateY(1px);
+        }
+        .admin-tabs .tab-btn.active {
+            background: linear-gradient(180deg, rgba(99, 102, 241, .28), rgba(79, 70, 229, .14));
+            border-color: rgba(99, 102, 241, .45);
+            color: #fff;
+            box-shadow: inset 0 1px 0 rgba(255, 255, 255, .08), 0 4px 14px rgba(99, 102, 241, .20);
+        }
+        .admin-tabs .tab-btn .tab-emoji {
+            font-size: 1rem;
+            line-height: 1;
+            filter: grayscale(.15);
+        }
+        .admin-tabs .tab-badge {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px 8px;
+            border-radius: 999px;
+            background: rgba(148, 163, 184, .14);
+            color: var(--text-muted);
+            font-size: .72rem;
+            font-weight: 700;
+        }
+        .admin-tabs .tab-btn.active .tab-badge {
+            background: rgba(255, 255, 255, .16);
+            color: #fff;
+        }
+        @media (max-width: 520px) {
+            .admin-tabs { margin-left: -2px; margin-right: -2px; padding: 3px; }
+            .admin-tabs .tab-btn { padding: 8px 12px; font-size: .82rem; }
+        }
         .top-actions form { margin: 0; }
         .ghost-link {
             color: var(--text-muted);
@@ -178,6 +250,13 @@
             box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 4px 14px rgba(99,102,241,.22);
         }
         .btn-indigo:hover { filter: brightness(1.08); }
+        .btn-dangerish {
+            background: linear-gradient(180deg, #ef4444, #b91c1c) !important;
+            color: #fff !important;
+            border-color: rgba(255,255,255,.1) !important;
+            box-shadow: 0 1px 0 rgba(255,255,255,.08) inset, 0 4px 18px rgba(239,68,68,.28) !important;
+        }
+        .btn-dangerish:hover { filter: brightness(1.08); }
         .btn-row { display: flex; gap: 8px; flex-wrap: wrap; }
         /* Cards / sections */
         .card {
@@ -1090,6 +1169,24 @@
             </div>
         </header>
 
+        <nav class="admin-tabs" role="tablist" aria-label="Menu admin">
+            {% set tab = active_tab if active_tab else 'dashboard' %}
+            <a class="tab-btn {{ 'active' if tab == 'dashboard' else '' }}"
+               role="tab" aria-selected="{{ 'true' if tab == 'dashboard' else 'false' }}"
+               href="{{ url_for('admin_page') }}">
+                <span class="tab-emoji">🏠</span>
+                Beranda
+                <span class="tab-badge">Ringkasan</span>
+            </a>
+            <a class="tab-btn {{ 'active' if tab == 'top5' else '' }}"
+               role="tab" aria-selected="{{ 'true' if tab == 'top5' else 'false' }}"
+               href="{{ url_for('admin_top5') }}">
+                <span class="tab-emoji">⭐</span>
+                Top 5 Kompilasi
+                <span class="tab-badge">Build lokal</span>
+            </a>
+        </nav>
+
         <main>
             {% set flashes = get_flashed_messages(with_categories=true) %}
             {% if flashes %}
@@ -1101,6 +1198,8 @@
             </div>
             {% endif %}
 
+            {% set tab = active_tab if active_tab else 'dashboard' %}
+            {% if tab != 'top5' %}
             <!-- ============ Accounts ============ -->
             <section class="card">
                 <div class="card-inner">
@@ -1113,7 +1212,27 @@
                     </div>
 
                     <div class="accounts-grid">
-                        <div class="account-card" data-provider="youtube">
+                        <div class="account-card" data-provider="youtube" id="account-card-youtube">
+                            {% if youtube_token_expired %}
+                            <div class="token-alert token-alert-danger" role="alert" style="margin:0 0 14px;border-radius:12px;padding:12px 14px;border:1px solid rgba(244,63,94,.35);background:linear-gradient(180deg, rgba(244,63,94,.12), rgba(127,29,29,.18));box-shadow: inset 0 1px 0 rgba(255,255,255,.04)">
+                                <div style="display:flex;gap:10px;align-items:flex-start;justify-content:space-between;flex-wrap:wrap">
+                                    <div style="display:flex;gap:10px;align-items:center;">
+                                        <span style="font-size:1.2rem">⚠️</span>
+                                        <div>
+                                            <div style="font-weight:700;color:#fecdd3;font-size:.9rem;margin:0 0 2px">Token YouTube KADALUARSA atau DICABUT</div>
+                                            <div style="color:#fda4af;font-size:.82rem;line-height:1.45;margin:0">
+                                                Upload tadi gagal: <code style="padding:1px 6px;border-radius:6px;background:rgba(127,29,29,.35);color:#fecaca">invalid_grant: Token has been expired or revoked.</code>
+                                                Silakan klik <strong>Hubungkan ulang YouTube</strong> di bawah untuk re-authorize channel.
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <a class="btn btn-primary btn-dangerish" href="{{ url_for('youtube_auth') }}"
+                                       style="white-space:nowrap;flex-shrink:0;margin-top:4px">
+                                        🔁 Hubungkan ulang YouTube (1 klik)
+                                    </a>
+                                </div>
+                            </div>
+                            {% endif %}
                             <div class="account-head">
                                 <div class="provider">
                                     <div class="provider-name">
@@ -1122,16 +1241,18 @@
                                     </div>
                                     <p class="provider-desc">Upload ke channel YouTube Shorts. Perlu client ID + secret OAuth.</p>
                                 </div>
-                                {% if youtube_connected %}
+                                {% if youtube_connected and not youtube_token_expired %}
                                     <span class="chip chip-success">Terhubung</span>
+                                {% elif youtube_token_expired %}
+                                    <span class="chip chip-danger">⚠ Token dicabut</span>
                                 {% else %}
                                     <span class="chip chip-neutral">Belum terhubung</span>
                                 {% endif %}
                             </div>
                             <div class="account-foot">
                                 {% if youtube_ready %}
-                                    <a class="btn {{ 'btn-secondary' if youtube_connected else 'btn-primary' }}" href="{{ url_for('youtube_auth') }}">
-                                        {{ 'Hubungkan ulang YouTube' if youtube_connected else 'Hubungkan YouTube' }}
+                                    <a class="btn {{ ('btn-primary' if youtube_token_expired else ('btn-secondary' if youtube_connected and not youtube_token_expired else 'btn-primary')) }}" href="{{ url_for('youtube_auth') }}">
+                                        {{ 'Hubungkan ulang YouTube' if youtube_connected or youtube_token_expired else 'Hubungkan YouTube' }}
                                     </a>
                                 {% else %}
                                     <small>⚠ Set YOUTUBE_CLIENT_ID dan YOUTUBE_CLIENT_SECRET di env sebelum bisa hubungkan.</small>
@@ -1168,15 +1289,96 @@
                 </div>
             </section>
 
+            <!-- ============ Konfigurasi LLM ============ -->
+            <section class="card">
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div>
+                            <h2>Konfigurasi LLM API</h2>
+                            <p class="subtitle">Setup API key untuk generate pilihan Top 5 momen otomatis via AI. Disimpan permanen di SQLite admin (bukan env).</p>
+                        </div>
+                        {% if llm_config and llm_config.configured_from == "stored" %}
+                            <span class="chip chip-success">✅ Tersimpan (DB)</span>
+                        {% elif llm_config and llm_config.configured_from == "env" %}
+                            <span class="chip chip-neutral">📖 Read-only (.env)</span>
+                        {% else %}
+                            <span class="chip chip-danger">⚠️ Belum dikonfigurasi</span>
+                        {% endif %}
+                    </div>
+
+                    <div class="accounts-grid">
+                        <div class="account-card" id="llm-config-card" style="min-width:100%">
+                            <div class="account-head" style="align-items:flex-start">
+                                <div class="provider" style="flex-direction:column;align-items:flex-start;gap:8px">
+                                    <div class="provider-name">
+                                        <span class="provider-icon" style="background:linear-gradient(135deg,var(--accent-indigo),#a78bfa);color:#fff">🧠</span>
+                                        AI / LLM Provider
+                                    </div>
+                                    <p class="provider-desc" style="margin:0">
+                                        Digunakan untuk pemilihan otomatis momen Top 5 Kompilasi (Tab Top5). Default endpoint <code class="monospaced" style="background:var(--bg-soft);padding:1px 6px;border-radius:6px">ai.sumopod.com</code> model <code class="monospaced" style="background:var(--bg-soft);padding:1px 6px;border-radius:6px">MiniMax-M2.7-highspeed</code>. Jika API key tersimpan, priority-nya melebihi env var.
+                                    </p>
+                                </div>
+                            </div>
+
+                            <form id="llm-config-form" class="form" style="margin-top:16px;display:grid;grid-template-columns:1fr;gap:14px">
+                                <div style="display:grid;grid-template-columns:1.2fr 1fr;gap:14px;align-items:end">
+                                    <div>
+                                        <label for="llm_api_key" style="font-weight:600;font-size:.88rem;margin-bottom:6px;display:block">API Key <span style="color:var(--danger)">*</span>
+                                            {% if llm_config and llm_config.api_key %}
+                                            <small style="color:var(--text-muted);font-weight:400;margin-left:6px">tersimpan: <span class="monospaced">{{ llm_config.api_key }}</span></small>
+                                            {% endif %}
+                                        </label>
+                                        <input type="password" id="llm_api_key" name="llm_api_key" autocomplete="off" spellcheck="false" maxlength="400" placeholder="sk-... / Bearer token" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border-soft);background:var(--bg-elev);color:var(--text);font-family:var(--mono);font-size:.88rem">
+                                        <small style="color:var(--text-muted);font-size:.78rem;display:block;margin-top:6px">Kosongkan jika ingin pakai key dari environment variable <code class="monospaced" style="background:var(--bg-soft);padding:1px 6px;border-radius:6px">HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY</code></small>
+                                    </div>
+                                    <div>
+                                        <label for="llm_model" style="font-weight:600;font-size:.88rem;margin-bottom:6px;display:block">Model</label>
+                                        <input type="text" id="llm_model" name="llm_model" maxlength="120" placeholder="MiniMax-M2.7-highspeed" value="{{ llm_config.model if llm_config else '' }}" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border-soft);background:var(--bg-elev);color:var(--text);font-size:.88rem">
+                                    </div>
+                                </div>
+                                <div>
+                                    <label for="llm_base_url" style="font-weight:600;font-size:.88rem;margin-bottom:6px;display:block">Base URL endpoint /v1/chat/completions</label>
+                                    <input type="url" id="llm_base_url" name="llm_base_url" maxlength="500" placeholder="https://ai.sumopod.com/v1/chat/completions" value="{{ llm_config.base_url if llm_config else '' }}" style="width:100%;padding:10px 14px;border-radius:10px;border:1px solid var(--border-soft);background:var(--bg-elev);color:var(--text);font-family:var(--mono);font-size:.82rem">
+                                    <small style="color:var(--text-muted);font-size:.78rem;display:block;margin-top:6px">Bisa ganti OpenRouter (https://openrouter.ai/api/v1/chat/completions), dll. Pastikan path endpoint lengkap ke /chat/completions.</small>
+                                </div>
+
+                                <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+                                    <button type="submit" class="btn btn-primary" id="btn-llm-save">💾 Simpan Konfigurasi</button>
+                                    <button type="button" class="btn btn-secondary" id="btn-llm-wipe">🧹 Hapus Key tersimpan (pakai env)</button>
+                                    <span id="llm-config-status" class="field-hint status-text" style="font-size:.86rem;margin-left:4px" role="status" aria-live="polite"></span>
+                                </div>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
             <!-- ============ YouTube Clips ============ -->
             <section class="card">
                 <div class="card-inner">
                     <div class="card-header">
                         <div>
                             <h2>Klip YouTube siap upload</h2>
-                            <p class="subtitle">Review satu per satu. Upload via API jika quota masih ada, atau lewat YouTube Studio kalau quota habis untuk hari itu.</p>
+                            <p class="subtitle">Review satu per satu. Upload via API jika quota masih ada, atau lewat YouTube Studio kalau quota habis untuk hari itu.
+                            {% if hidden_already_uploaded and hidden_already_uploaded > 0 %}
+                                <span style="color:var(--text-muted);opacity:.9;display:block;margin-top:4px;font-size:.82rem">
+                                    ✅ {{ hidden_already_uploaded }} klip <strong>sudah pernah di-upload sebelumnya</strong> (ada di YouTube Studio / riwayat) — disembunyikan dari panel ini. Lihat status & historynya di <em>Pengajuan terbaru</em> di atas.
+                                </span>
+                            {% else %}
+                                <span style="color:var(--text-muted);opacity:.85;display:block;margin-top:4px;font-size:.82rem">
+                                    Tampil semua {{ clips_pager.total if clips_pager else (deployed_clips|length if deployed_clips else 0) }} klip yang belum pernah diupload.
+                                </span>
+                            {% endif %}
+                            </p>
                         </div>
-                        <span class="card-badge">{{ clips_pager.total if clips_pager else (deployed_clips|length if deployed_clips else 0) }} klip</span>
+                        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                            {% if hidden_already_uploaded and hidden_already_uploaded > 0 %}
+                                <span class="chip chip-neutral" title="Sudah pernah di-upload sebelumnya (sembunyikan)">
+                                    ✅ Riwayat upload: {{ hidden_already_uploaded }} klip
+                                </span>
+                            {% endif %}
+                            <span class="card-badge">{{ clips_pager.total if clips_pager else (deployed_clips|length if deployed_clips else 0) }} klip siap upload</span>
+                        </div>
                     </div>
 
                     <details class="hint-box">
@@ -1376,15 +1578,20 @@
                 </div>
             </section>
 
+            {% endif %}
+
             <!-- ============ Compilation ============ -->
-            <section class="card">
+            {% if tab == 'top5' %}
+            <section class="card" style="background: linear-gradient(180deg, rgba(99,102,241,.06), rgba(15,23,42,.35));">
                 <div class="card-inner">
                     <div class="card-header">
                         <div>
-                            <h2>Kompilasi TOP 5</h2>
-                            <p class="subtitle">Pilih episode, usulkan momen secara otomatis atau susun sendiri, build preview lokal sebelum upload.</p>
+                            <h2 style="letter-spacing:-0.01em;font-size:1.1rem">⭐ Top 5 Kompilasi</h2>
+                            <p class="subtitle">Pilih episode, review kandidat momen (auto-isi slot satu per satu), build preview lokal sebelum upload ke YouTube Shorts.</p>
                         </div>
-                        <span class="card-badge">Build lokal</span>
+                        <span class="card-badge" style="background: linear-gradient(180deg, rgba(99,102,241,.28), rgba(79,70,229,.14)); color: #dbeafe; border-color: rgba(99,102,241,.4);">
+                            Build lokal · full layar
+                        </span>
                     </div>
 
                     <form id="compilation-form">
@@ -1405,41 +1612,72 @@
                                 <input id="compilation-header" value="TOP 5 MOMEN" maxlength="80" required>
                             </div>
                         </div>
-                        <div class="btn-row" style="margin:16px 0 6px;gap:8px;align-items:center;flex-wrap:wrap">
-                            <button id="compilation-suggest" class="btn btn-secondary" type="button">✨ Usul otomatis (review dulu sebelum pilih)</button>
-                            <button id="compilation-autofill5" class="btn btn-ghost" type="button" title="Isi 5 teratas otomatis dari usulan (tanpa review)">⚡ Isi 5 langsung (opsi lawas)</button>
+                        <div class="btn-row" style="margin:18px 0 8px;gap:10px;align-items:center;flex-wrap:wrap">
+                            <button id="compilation-suggest" class="btn btn-secondary" type="button">✨ Usul otomatis (review dulu, klik kandidat untuk isi slot)</button>
+                            <button id="compilation-autofill5" class="btn btn-ghost" type="button" title="Isi 5 teratas otomatis dari kandidat (tanpa review)">⚡ Isi 5 langsung (opsi lawas)</button>
+                            <span id="compilation-suggest-status" class="field-hint status-text" role="status" aria-live="polite" style="margin:0;flex:1;min-width:220px">Pilih episode → klik Usul otomatis untuk menampilkan kandidat, klik kandidat untuk mengisi slot momen 1–5.</span>
                         </div>
-                        <div>
-                            <span id="compilation-suggest-status" class="field-hint status-text" role="status" aria-live="polite">Pilih episode → klik Usul otomatis untuk menampilkan kandidat, klik kandidat untuk mengisi slot momen 1–5.</span>
-                        </div>
-                        <div id="compilation-source-wrap" class="compilation-video-wrap" style="margin:18px 0 10px" hidden>
-                            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
-                                <h4 style="margin:0;font-size:.9rem;color:var(--text-muted)">📼 Video sumber episode (untuk bantu review momen &amp; ambil timestamp)</h4>
-                                <a id="compilation-source-link" class="btn btn-secondary btn-ghost" target="_blank" rel="noopener noreferrer">⬇ Buka sumber di tab baru</a>
+
+                        <div style="display:grid;grid-template-columns: 1fr 1fr;gap:18px;margin:18px 0 6px" class="top5-grid-vids">
+                            <div id="compilation-source-wrap" class="compilation-video-wrap" hidden style="margin:0">
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+                                    <h4 style="margin:0;font-size:.9rem;color:var(--text-muted)">📼 Video sumber (klik kandidat untuk seek otomatis)</h4>
+                                    <a id="compilation-source-link" class="btn btn-secondary btn-ghost" target="_blank" rel="noopener noreferrer">⬇ Buka sumber di tab baru</a>
+                                </div>
+                                <video id="compilation-source" controls preload="metadata" playsinline crossorigin="anonymous" style="aspect-ratio:16/9;width:100%;max-height:560px;object-fit:contain;background:#000;border-radius:18px;border:1px solid var(--border-soft)"></video>
                             </div>
-                            <video id="compilation-source" controls preload="metadata" playsinline crossorigin="anonymous" style="aspect-ratio:16/9;width:100%;max-height:520px;object-fit:contain;background:#000;border-radius:16px;border:1px solid var(--border-soft)"></video>
+                            <div class="compilation-video-wrap" id="compilation-preview-wrap" hidden style="margin:0">
+                                <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+                                    <h4 style="margin:0;font-size:.9rem;color:var(--text-muted)">🎬 Preview kompilasi</h4>
+                                    <a id="compilation-preview-link" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">⬇ Buka di tab baru</a>
+                                </div>
+                                <video id="compilation-preview" controls preload="metadata" playsinline style="aspect-ratio:16/9;width:100%;max-height:560px;object-fit:contain;background:#000;border-radius:18px;border:1px solid var(--border-soft)"></video>
+                            </div>
                         </div>
-                        <div id="compilation-suggestions" class="segment-buttons" hidden></div>
+                        <style>
+                            @media (max-width: 960px) {
+                                .top5-grid-vids { grid-template-columns: 1fr !important; }
+                            }
+                        </style>
 
-                        <div id="compilation-items" class="compilation-grid"></div>
+                        <div id="compilation-suggestions" class="segment-buttons" hidden style="margin:16px 0 8px"></div>
 
-                        <div style="margin-top:22px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-                            <button type="submit" class="btn btn-primary">🛠 Build preview</button>
-                            <span id="compilation-status" class="field-hint status-text" role="status" aria-live="polite"></span>
+                        <div id="compilation-items" class="compilation-grid" style="margin-top:14px"></div>
+
+                        <div id="compilation-duration-info" style="margin-top:18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap;padding:10px 14px;border-radius:12px;background:var(--bg-soft);border:1px solid var(--border-soft);min-height:44px">
+                            <span id="compilation-duration-label" style="font-weight:600;font-size:.9rem;color:var(--text-muted)">Durasi total: pilih 5 momen.</span>
+                            <span id="compilation-duration-per-item" style="font-size:.82rem;color:var(--text-muted);opacity:.85"></span>
                         </div>
+
+                        <div style="margin-top:26px;display:flex;gap:14px;align-items:center;flex-wrap:wrap">
+                            <button type="submit" class="btn btn-primary" style="padding:12px 22px;font-size:.95rem">🛠 Build preview Top 5 Kompilasi</button>
+                            <span id="compilation-status" class="field-hint status-text" role="status" aria-live="polite" style="font-size:.86rem"></span>
+                        </div>
+
+                        <div id="compilation-perma-actions" style="margin-top:18px;padding:16px 18px;border-radius:16px;background:linear-gradient(135deg, var(--bg-soft) 0%, transparent 100%);border:1px solid var(--border-soft);display:none">
+                            <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;margin-bottom:12px">
+                                <div>
+                                    <h4 style="margin:0 0 6px;font-size:.95rem">💾 Simpan & Publikasikan</h4>
+                                    <p style="margin:0;font-size:.8rem;color:var(--text-muted)">Hasil build di <code>/tmp</code> (hilang kalau server restart). Deploy dulu ke storage permanen, baru upload ke YouTube.</p>
+                                </div>
+                                <div id="compilation-chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
+                            </div>
+                            <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+                                <button type="button" id="btn-compilation-deploy" class="btn btn-secondary" style="padding:10px 18px;font-size:.9rem">📦 Deploy ke static/clips (permanen)</button>
+                                <button type="button" id="btn-compilation-upload" class="btn btn-primary" style="padding:10px 18px;font-size:.9rem;background:linear-gradient(135deg,#ff0000,#cc0000)">🚀 Upload ke YouTube Shorts</button>
+                                <a id="compilation-deployed-link" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="padding:8px 14px;display:none">⬇ Download versi permanen</a>
+                                <a id="compilation-yt-link" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="padding:8px 14px;display:none">▶ Buka di YouTube ↗</a>
+                            </div>
+                            <div id="compilation-deploy-status" style="margin-top:12px;font-size:.84rem" role="status" aria-live="polite"></div>
+                        </div>
+
                     </form>
-
-                    <div class="compilation-video-wrap" id="compilation-preview-wrap" hidden>
-                        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-                            <h4 style="margin:0;font-size:.9rem;color:var(--text-muted)">🎬 Preview kompilasi</h4>
-                            <a id="compilation-preview-link" class="btn btn-secondary" target="_blank" rel="noopener noreferrer">⬇ Buka di tab baru</a>
-                        </div>
-                        <video id="compilation-preview" controls preload="metadata" playsinline></video>
-                    </div>
                 </div>
             </section>
+            {% endif %}
 
             <!-- ============ Add Episode ============ -->
+            {% if tab != 'top5' %}
             <section class="card">
                 <div class="card-inner">
                     <div class="card-header">
@@ -1498,10 +1736,13 @@
                     {% if submissions %}
                     <div class="submission-groups">
                         {% for group in submissions %}
+                        {% set group_items = (group['items'] if group['items'] is defined else group.submissions) %}
+                        {% set has_running_or_pending = namespace(v=false) %}
+                        {% for _item in group_items %}{% if _item.status == 'in_progress' or _item.status == 'pending' %}{% set has_running_or_pending.v = true %}{% endif %}{% endfor %}
                         <article class="sub-group"
                                  data-video-id="{{ group.video_id }}"
                                  data-group-status="{{ group.worst_status }}"
-                                 aria-expanded="true">
+                                 aria-expanded="{{ 'true' if has_running_or_pending.v else 'false' }}">
                             <header class="sub-group-head">
                                 <a class="sub-group-thumb" href="{{ group.video_url }}" target="_blank" rel="noopener noreferrer"
                                    title="Buka sumber YouTube di tab baru">
@@ -1521,7 +1762,7 @@
                                         {% if group.last_created and group.last_created != group.first_created %}
                                             <span>Terakhir: {{ group.last_created[:16].replace('T',' ') }} UTC</span>
                                         {% endif %}
-                                        <span>Total item: <strong>{{ (group['items'] if group['items'] is defined else group.submissions)|length }}</strong></span>
+                                        <span>Total item: <strong>{{ group_items|length }}</strong></span>
                                     </div>
                                     <a class="sg-link" href="{{ group.video_url }}" target="_blank" rel="noopener noreferrer">
                                         {{ group.video_id }} ↗
@@ -1548,7 +1789,16 @@
                                             <span class="mini-chip">{{ c }}</span>
                                         {% endfor %}
                                         {% if not first_counter.found %}
-                                            <span class="mini-chip">{{ (group['items'] if group['items'] is defined else group.submissions)|length }} item</span>
+                                            <span class="mini-chip">{{ group_items|length }} item</span>
+                                        {% endif %}
+                                        {% set ns_errors = namespace(any=false, count=0) %}
+                                        {% for it in group_items %}
+                                            {% if it.status == 'failed' and it.error_message is defined and it.error_message is not none and it.error_message|string|length > 0 %}
+                                                {% set ns_errors.any = true %}{% set ns_errors.count = ns_errors.count + 1 %}
+                                            {% endif %}
+                                        {% endfor %}
+                                        {% if ns_errors.any %}
+                                            <span class="mini-chip" style="background:#fff5f5;color:#b91c1c;border:1px solid #fecaca;font-weight:700">❌ {{ ns_errors.count }} item error log ada</span>
                                         {% endif %}
                                     </div>
                                     <span class="chip {{ group.group_status_class }}">{{ group.group_status_label }}</span>
@@ -1558,8 +1808,8 @@
                                             ▶ Putar sumber
                                         </button>
                                         <button type="button" class="btn btn-indigo sg-toggle" data-group-toggle-items
-                                                aria-expanded="true" aria-controls="items-wrap-{{ group.video_id }}">
-                                            ⋮ Detail
+                                                aria-expanded="{{ 'true' if has_running_or_pending.v else 'false' }}" aria-controls="items-wrap-{{ group.video_id }}">
+                                            {{ '▲ Sembunyikan' if has_running_or_pending.v else '⋮ Detail' }}
                                         </button>
                                     </div>
                                 </div>
@@ -1576,8 +1826,10 @@
                                     allowfullscreen></iframe>
                             </div>
 
-                            <div class="sub-group-items" id="items-wrap-{{ group.video_id }}" aria-hidden="false">
-                                {% for item in (group['items'] if group['items'] is defined else group.submissions) %}
+                            <div class="sub-group-items" id="items-wrap-{{ group.video_id }}"
+                                 aria-hidden="{{ 'false' if has_running_or_pending.v else 'true' }}"
+                                 {% if not has_running_or_pending.v %}hidden{% endif %}>
+                                {% for item in group_items %}
                                 <div class="sub-item"
                                      data-video-id="{{ item.video_id }}"
                                      data-submission-id="{{ item.id }}">
@@ -1591,6 +1843,16 @@
                                             {{ item.title or group.title or 'Tanpa judul' }}
                                         </span>
                                         <span class="si-when">{{ item.created_at[:16].replace('T',' ') }} UTC · status: {{ item.status }}</span>
+                                        {% if item.status == 'failed' and item.error_message is defined and item.error_message is not none and (item.error_message|string|length) > 0 %}
+                                            <details class="sub-error-box" style="margin-top:8px;grid-column:1/-1;background:#fff5f5;border:1px solid #fecaca;border-radius:8px;padding:6px 10px">
+                                                <summary style="cursor:pointer;color:#b91c1c;font-weight:700;font-size:.85rem">
+                                                    ❌ Gagal: {{ (item.error_message|string|replace('\n',' '))[:90] }}
+                                                    {% if item.last_error_at is defined and item.last_error_at %}· <span style="color:#64748b;font-weight:400">{{ item.last_error_at[:16].replace('T',' ') }} UTC</span>{% endif %}
+                                                    <span style="color:#64748b;font-weight:400;margin-left:6px">(klik untuk detail)</span>
+                                                </summary>
+                                                <pre style="white-space:pre-wrap;margin:6px 0 2px;font-size:.82rem;color:#991b1b;background:#ffffff;padding:8px 10px;border-radius:6px;border:1px dashed #fecaca">{{ item.error_message|string|e }}</pre>
+                                            </details>
+                                        {% endif %}
                                     </div>
                                     <div class="job-progress job-cell">
                                         <span class="job-stage">{{ item.progress.stage }}</span>
@@ -1610,6 +1872,7 @@
                     {% endif %}
                 </div>
             </section>
+            {% endif %}
         </main>
     </div>
 
@@ -1844,7 +2107,113 @@
         const compilationSourceWrap = document.querySelector("#compilation-source-wrap");
         const compilationSource = document.querySelector("#compilation-source");
         const compilationSourceLink = document.querySelector("#compilation-source-link");
+        // Deploy + upload UI (new)
+        const compilationPermaActions = document.querySelector("#compilation-perma-actions");
+        const compilationChips = document.querySelector("#compilation-chips");
+        const compilationDeployStatus = document.querySelector("#compilation-deploy-status");
+        const btnCompilationDeploy = document.querySelector("#btn-compilation-deploy");
+        const btnCompilationUpload = document.querySelector("#btn-compilation-upload");
+        const compilationDeployedLink = document.querySelector("#compilation-deployed-link");
+        const compilationYtLink = document.querySelector("#compilation-yt-link");
         let lastCandidates = []; // cache "Usul otomatis" result untuk autofill tanpa hit ulang
+
+        const COMPILATION_CHIP_STATUS = {
+            uploaded: { cls: "chip-success", label: "⬆ Sudah di-upload YouTube", icon: "✅" },
+            uploading: { cls: "chip-warn", label: "⏳ Sedang meng-upload...", icon: "⏳" },
+            manual: { cls: "chip-info", label: "📝 Tercatat upload manual", icon: "📝" },
+            quota: { cls: "chip-danger", label: "⚠ Kuota upload habis", icon: "⚠" },
+            failed: { cls: "chip-danger", label: "❌ Gagal upload", icon: "❌" },
+        };
+
+        function renderCompilationChips(status) {
+            if (!compilationChips) return;
+            compilationChips.innerHTML = "";
+            const chips = [];
+            // Lokasi file chip
+            if (status.deployed && status.static_url) {
+                const deployedChip = document.createElement("span");
+                deployedChip.className = "chip-success";
+                deployedChip.style.cssText = "font-size:.75rem;padding:3px 10px;border-radius:999px;background:rgba(22,163,74,0.12);color:rgb(21,128,61);border:1px solid rgba(22,163,74,0.35);font-weight:600";
+                deployedChip.textContent = "💾 Tersimpan permanen";
+                chips.push(deployedChip);
+            } else {
+                const tmpChip = document.createElement("span");
+                tmpChip.className = "chip-warn";
+                tmpChip.style.cssText = "font-size:.75rem;padding:3px 10px;border-radius:999px;background:rgba(234,179,8,0.12);color:rgb(161,98,7);border:1px solid rgba(234,179,8,0.35);font-weight:600";
+                tmpChip.textContent = "⚠️ Masih di /tmp (bisa hilang)";
+                chips.push(tmpChip);
+            }
+            // Upload status chip
+            if (status.upload_status && COMPILATION_CHIP_STATUS[status.upload_status]) {
+                const def = COMPILATION_CHIP_STATUS[status.upload_status];
+                const chip = document.createElement("span");
+                chip.style.cssText = (
+                    status.upload_status === "uploaded" || status.upload_status === "manual"
+                        ? "font-size:.75rem;padding:3px 10px;border-radius:999px;background:rgba(22,163,74,0.12);color:rgb(21,128,61);border:1px solid rgba(22,163,74,0.35);font-weight:600"
+                        : status.upload_status === "uploading"
+                        ? "font-size:.75rem;padding:3px 10px;border-radius:999px;background:rgba(234,179,8,0.12);color:rgb(161,98,7);border:1px solid rgba(234,179,8,0.35);font-weight:600"
+                        : "font-size:.75rem;padding:3px 10px;border-radius:999px;background:rgba(220,38,38,0.12);color:rgb(185,28,28);border:1px solid rgba(220,38,38,0.35);font-weight:600"
+                );
+                chip.textContent = `${def.icon} ${def.label}${status.upload_video_id ? ` · ${status.upload_video_id}` : ""}`;
+                if (status.upload_error && (status.upload_status === "failed" || status.upload_status === "quota")) {
+                    chip.title = status.upload_error;
+                }
+                chips.push(chip);
+            }
+            chips.forEach((c) => compilationChips.appendChild(c));
+            // Deployed permanent download link
+            if (compilationDeployedLink) {
+                if (status.deployed && status.static_url) {
+                    compilationDeployedLink.href = status.static_url;
+                    compilationDeployedLink.style.display = "";
+                } else {
+                    compilationDeployedLink.style.display = "none";
+                }
+            }
+            // YouTube live link
+            if (compilationYtLink) {
+                if (status.upload_url) {
+                    compilationYtLink.href = status.upload_url;
+                    compilationYtLink.style.display = "";
+                } else {
+                    compilationYtLink.style.display = "none";
+                }
+            }
+            // Show/hide the actions box: show minimaly if build completed or file exists already
+            if (compilationPermaActions) {
+                const showIt = (status.status === "completed") || status.deployed || !!status.upload_status;
+                compilationPermaActions.style.display = showIt ? "block" : "none";
+            }
+        }
+
+        let compilationStatusCache = { deployed: false, upload_status: null, status: "idle" };
+
+        function applyPermaStateFromStatus(s) {
+            compilationStatusCache = Object.assign({}, s);
+            renderCompilationChips(compilationStatusCache);
+        }
+
+        // Immediate probe when episode changes: if build already exists (completed previously), show perma actions now
+        async function probeCompilationStatusNow() {
+            if (!compilationEpisode || !compilationEpisode.value) return null;
+            try {
+                const r = await fetch(`/admin/compilation/status/${encodeURIComponent(compilationEpisode.value)}`);
+                if (!r.ok) return null;
+                const s = await r.json();
+                // If completed already, show player + perma actions without needing re-build
+                if (s.status === "completed" && s.preview && compilationPreview) {
+                    const url = `${s.preview}?v=${Date.now()}`;
+                    compilationPreview.src = url;
+                    compilationPreviewLink.href = url;
+                    if (compilationPreviewWrap) compilationPreviewWrap.hidden = false;
+                    compilationPreview.load();
+                }
+                applyPermaStateFromStatus(s);
+                return s;
+            } catch (e) {
+                return null;
+            }
+        }
 
         function resetCompilationSlots() {
             compilationItems.innerHTML = "";
@@ -1860,8 +2229,66 @@
                         <input class="compilation-end" type="number" min="0" step="0.01" placeholder="Misal 168.0" required>
                     </div>`);
             }
+            updateCompilationDuration();
         }
         resetCompilationSlots();
+
+        const durLabel    = document.querySelector("#compilation-duration-label");
+        const durPerItem  = document.querySelector("#compilation-duration-per-item");
+        const MAX_TOTAL_DURATION_S = 60.0;
+        const PER_ITEM_MIN_S = 6.0;
+        const PER_ITEM_MAX_S = 14.0;
+
+        function updateCompilationDuration() {
+            const items = [...document.querySelectorAll(".comp-item")];
+            const perItem = items.map((it, i) => {
+                const s = Number(it.querySelector(".compilation-start").value);
+                const e = Number(it.querySelector(".compilation-end").value);
+                if (Number.isFinite(s) && Number.isFinite(e) && e > s) {
+                    return { idx: i + 1, dur: e - s, ok: (e - s) >= PER_ITEM_MIN_S && (e - s) <= PER_ITEM_MAX_S };
+                }
+                return { idx: i + 1, dur: null, ok: true };
+            });
+            const total = perItem.reduce((acc, x) => acc + (x.dur || 0), 0);
+            const filledCount = perItem.filter((x) => x.dur !== null).length;
+            let label = "";
+            let style = "";
+            if (filledCount === 0) {
+                label = "Durasi total: pilih 5 momen.";
+                style = "color:var(--text-muted);font-weight:600;font-size:.9rem";
+            } else if (filledCount < 5) {
+                label = `Durasi total: ${total.toFixed(1)}s dari ${filledCount}/5 item (target ${MAX_TOTAL_DURATION_S.toFixed(0)}s).`;
+                style = "color:var(--text-muted);font-weight:600;font-size:.9rem";
+            } else if (total <= MAX_TOTAL_DURATION_S) {
+                label = `✅ Durasi total: ${total.toFixed(1)}s / ${MAX_TOTAL_DURATION_S.toFixed(0)}s (pas untuk Shorts).`;
+                style = "color:var(--success);font-weight:700;font-size:.95rem";
+            } else {
+                const over = total - MAX_TOTAL_DURATION_S;
+                label = `⚠️ Durasi total: ${total.toFixed(1)}s KELEBIHAN ${over.toFixed(1)}s (max ${MAX_TOTAL_DURATION_S.toFixed(0)}s). Kurangi atau auto-truncate saat build.`;
+                style = "color:var(--warning);font-weight:700;font-size:.95rem";
+            }
+            if (durLabel) {
+                durLabel.textContent = label;
+                durLabel.setAttribute("style", style);
+            }
+            // Per-item breakdown list
+            if (durPerItem) {
+                const parts = perItem
+                    .filter((x) => x.dur !== null)
+                    .map((x) => `#${x.idx} ${x.dur.toFixed(1)}s${(!x.ok) ? ` ❌(bukan ${PER_ITEM_MIN_S.toFixed(0)}-${PER_ITEM_MAX_S.toFixed(0)}s)` : ""}`)
+                    .join("  ·  ");
+                durPerItem.textContent = parts;
+            }
+            // Build submit button disabled jika ada item durasi invalid (0 / >max / <min)
+            const btn = compilationForm?.querySelector('button[type="submit"]');
+            if (btn) {
+                const anyInvalid = perItem.some((x) => x.dur !== null && !x.ok);
+                btn.disabled = anyInvalid;
+                btn.title = anyInvalid ? "Satu atau lebih momen durasi tidak sesuai 6-14s." : "";
+            }
+        }
+
+        compilationItems.addEventListener("input", updateCompilationDuration);
 
         function fillNextSlot(start, end, label) {
             const target = [...document.querySelectorAll(".comp-item")].find((it) => !it.querySelector(".compilation-start").value);
@@ -1869,6 +2296,7 @@
             target.querySelector(".compilation-start").value = Number(start);
             target.querySelector(".compilation-end").value   = Math.max(Number(start) + 5, Number(end || start));
             target.querySelector(".compilation-label").value = String(label || "").slice(0, 60);
+            updateCompilationDuration();
             return target;
         }
 
@@ -1953,6 +2381,7 @@
                 slot.querySelector(".compilation-end").value   = Number(candidate.end);
                 slot.querySelector(".compilation-label").value = String(candidate.title || "").slice(0, 60);
             });
+            updateCompilationDuration();
             setStatus(compilationSuggestStatus, `Isi 5 otomatis dari ${pool.length} kandidat selesai. Review sebelum build ya.`, "ok");
         });
 
@@ -1961,6 +2390,11 @@
             compilationSuggestions.innerHTML = "";
             lastCandidates = [];
             resetCompilationSlots();
+            // Hide previous compilation state for new episode until status checked
+            applyPermaStateFromStatus({ deployed: false, upload_status: null, status: "idle" });
+            if (compilationPreviewWrap) compilationPreviewWrap.hidden = true;
+            if (compilationPreview) { compilationPreview.removeAttribute("src"); compilationPreview.load(); }
+            setStatus(compilationDeployStatus, "", "");
             // Video sumber
             if (compilationSourceWrap && compilationSource) {
                 compilationSource.removeAttribute("src");
@@ -2009,6 +2443,9 @@
             } catch (e) {
                 setStatus(compilationSuggestStatus, e.message || "Transcript gagal dimuat.", "err");
             }
+            // Akhirnya: probe status build/deploy/upload sekarang untuk episode ini.
+            // Kalau sudah pernah di-build sebelumnya, preview + deploy chips langsung muncul tanpa build ulang.
+            probeCompilationStatusNow();
         });
 
         // --- Submissions: "Putar sumber" toggle YouTube iframe embed ---
@@ -2059,10 +2496,17 @@
                 });
                 const result = await response.json();
                 if (!response.ok) throw new Error(result.error || "Build gagal dijalankan.");
+                if (result.auto_warning) {
+                    setStatus(compilationStatus, `Build dimulai. ⚠ ${result.auto_warning}`, "warn");
+                } else {
+                    const t = Number(result.total_duration_seconds);
+                    setStatus(compilationStatus, `Build dimulai (durasi rencana ${Number.isFinite(t) ? `${t.toFixed(1)}s` : ""}).`, "");
+                }
                 const poll = setInterval(async () => {
                     try {
                         const r = await fetch(`/admin/compilation/status/${encodeURIComponent(compilationEpisode.value)}`);
                         const s = await r.json();
+                        applyPermaStateFromStatus(s);
                         if (s.status === "running") {
                             setStatus(compilationStatus, "Sedang merender...", "");
                         } else if (s.status === "completed") {
@@ -2087,6 +2531,185 @@
                 setStatus(compilationStatus, e.message || "Build gagal.", "err");
             }
         });
+
+        // --- Compilation deploy + upload button handlers ---
+        if (btnCompilationDeploy) {
+            btnCompilationDeploy.addEventListener("click", async () => {
+                if (!compilationEpisode.value) {
+                    setStatus(compilationDeployStatus, "Pilih episode dulu.", "warn");
+                    return;
+                }
+                setStatus(compilationDeployStatus, "Mendeploy ke static/clips (atomic)...", "");
+                btnCompilationDeploy.disabled = true;
+                try {
+                    const response = await fetch(`/admin/compilation/deploy/${encodeURIComponent(compilationEpisode.value)}`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            Accept: "application/json",
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                        body: JSON.stringify({ csrf_token: "{{ csrf_token }}" }),
+                    });
+                    const data = response.ok ? await response.json() : { error: (await response.text()).slice(0, 500) || `HTTP ${response.status}` };
+                    if (!response.ok) throw new Error(data.error || "Deploy gagal.");
+                    applyPermaStateFromStatus({ ...compilationStatusCache, deployed: true, deployed_file: data.deployed_file, static_url: data.static_url });
+                    setStatus(compilationDeployStatus,
+                        `✅ Deploy berhasil: ${data.deployed_file || "file tersimpan permanen di static/clips"}${data.warning ? " · catatan: " + data.warning : ""}`,
+                        data.warning ? "warn" : "ok");
+                    // Probe ulang untuk confirm status terbaru (include deployed + uploaded chips if any
+                    probeCompilationStatusNow();
+                } catch (e) {
+                    setStatus(compilationDeployStatus, `❌ Gagal deploy: ${e.message}`, "err");
+                } finally {
+                    btnCompilationDeploy.disabled = false;
+                }
+            });
+        }
+
+        if (btnCompilationUpload) {
+            btnCompilationUpload.addEventListener("click", async () => {
+                if (!compilationEpisode.value) {
+                    setStatus(compilationDeployStatus, "Pilih episode dulu.", "warn");
+                    return;
+                }
+                setStatus(compilationDeployStatus, "Meng-upload ke YouTube Shorts (deploy duluan jika perlu)...", "warn");
+                btnCompilationUpload.disabled = true;
+                try {
+                    const response = await fetch(`/admin/compilation/upload/${encodeURIComponent(compilationEpisode.value)}`, {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            Accept: "application/json",
+                            "X-Requested-With": "XMLHttpRequest",
+                        },
+                        body: JSON.stringify({ csrf_token: "{{ csrf_token }}" }),
+                    });
+                    const data = (response.ok || response.status === 409)
+                        ? await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
+                        : { error: (await response.text()).slice(0, 500) || `HTTP ${response.status}` };
+                    if (!response.ok && response.status !== 409) throw new Error(data.error || "Upload gagal.");
+                    if (data.already_uploaded) {
+                        setStatus(compilationDeployStatus,
+                            `ℹ️ Sudah terupload (${data.status || "uploaded"}): ${data.video_id || ""} ${data.url ? "· " + data.url : ""}`, "ok");
+                    } else if (data.in_progress) {
+                        setStatus(compilationDeployStatus, `⏳ ${data.error || "Upload sedang berjalan — tunggu sebentar."}`, "warn");
+                    } else if (data.uploaded) {
+                            setStatus(compilationDeployStatus,
+                                `✅ Upload berhasil: ${data.url || data.video_id || "tersimpan"}${data.warning ? " · catatan: " + data.warning : ""}`,
+                                data.warning ? "warn" : "ok");
+                    } else {
+                            setStatus(compilationDeployStatus, `Selesai: ${JSON.stringify(data)}`, "ok");
+                    }
+                    probeCompilationStatusNow();
+                } catch (e) {
+                    setStatus(compilationDeployStatus, `❌ Upload gagal: ${e.message}`, "err");
+                    // Setidaknya deploy mungkin sudah ter-register ke DB untuk cek manual via probeCompilationStatusNow();
+                } finally {
+                    btnCompilationUpload.disabled = false;
+                }
+            });
+        }
+
+        // Initial probe: jika ada episode yang sudah terseleksi saat page load (optional jika ada).
+        if (compilationEpisode && compilationEpisode.value) {
+            probeCompilationStatusNow();
+        }
+
+        // --- Konfigurasi LLM form submit + wipe handlers (hanya di TAB dashboard, jadi check null safe) ---
+        (function llmConfigHandlersInit() {
+            const form = document.getElementById("llm-config-form");
+            const saveBtn = document.getElementById("btn-llm-save");
+            const wipeBtn = document.getElementById("btn-llm-wipe");
+            const statusEl = document.getElementById("llm-config-status");
+            const keyInput = document.getElementById("llm_api_key");
+            const modelInput = document.getElementById("llm_model");
+            const urlInput = document.getElementById("llm_base_url");
+            if (!form || !saveBtn) return; // Tidak ada di page (misal tab top5 tanpa account card)
+            function setLlmStatus(msg, kind) {
+                if (!statusEl) return;
+                statusEl.textContent = msg || "";
+                statusEl.classList.remove("ok", "warn", "err");
+                if (kind === "ok") statusEl.classList.add("ok");
+                else if (kind === "warn") statusEl.classList.add("warn");
+                else if (kind === "err") statusEl.classList.add("err");
+            }
+            form.addEventListener("submit", async (e) => {
+                e.preventDefault();
+                if (!saveBtn) return;
+                saveBtn.disabled = true;
+                const original = saveBtn.textContent;
+                saveBtn.textContent = "Menyimpan...";
+                setLlmStatus("", "");
+                try {
+                    const data = {
+                        csrf_token: (window.__admin_csrf || ""),
+                        llm_api_key: keyInput ? (keyInput.value || "").trim() : "",
+                        llm_base_url: urlInput ? (urlInput.value || "").trim() : "",
+                        llm_model: modelInput ? (modelInput.value || "").trim() : "",
+                    };
+                    const res = await fetch("{{ url_for('admin_llm_config_save') }}", {
+                        method: "POST",
+                        headers: {
+                            "Content-Type": "application/json",
+                            "X-Requested-With": "XMLHttpRequest",
+                            "Accept": "application/json",
+                        },
+                        body: JSON.stringify(data),
+                    });
+                    const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+                    if (!res.ok || json.error) throw new Error(json.error || "Gagal menyimpan.");
+                    setLlmStatus("✅ Konfigurasi LLM berhasil disimpan! Sumber: " + ((json.config || {}).configured_from || "DB"), "ok");
+                    // Refresh page setelah 700ms biar chips render fresh
+                    setTimeout(() => { location.reload(); }, 700);
+                } catch (err) {
+                    setLlmStatus("❌ " + (err.message || "Gagal menyimpan konfigurasi LLM."), "err");
+                    saveBtn.disabled = false;
+                    saveBtn.textContent = original;
+                }
+            });
+            if (wipeBtn) {
+                wipeBtn.addEventListener("click", async () => {
+                    if (!confirm("Hapus API key LLM yang tersimpan di DB? Akan fallback baca dari environment variable.")) return;
+                    wipeBtn.disabled = true;
+                    const original = wipeBtn.textContent;
+                    wipeBtn.textContent = "Menghapus...";
+                    setLlmStatus("", "");
+                    try {
+                        const data = {
+                            csrf_token: (window.__admin_csrf || ""),
+                            llm_api_key_clear: "1",
+                            llm_api_key: "",
+                        };
+                        const res = await fetch("{{ url_for('admin_llm_config_save') }}", {
+                            method: "POST",
+                            headers: {
+                                "Content-Type": "application/json",
+                                "X-Requested-With": "XMLHttpRequest",
+                                "Accept": "application/json",
+                            },
+                            body: JSON.stringify(data),
+                        });
+                        const json = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
+                        if (!res.ok || json.error) throw new Error(json.error || "Gagal menghapus.");
+                        setLlmStatus("🧹 Key tersimpan dihapus. Sekarang pakai environment variable (jika ada).", "warn");
+                        if (keyInput) keyInput.value = "";
+                        setTimeout(() => { location.reload(); }, 700);
+                    } catch (err) {
+                        setLlmStatus("❌ " + (err.message || "Gagal menghapus key."), "err");
+                    } finally {
+                        wipeBtn.disabled = false;
+                        wipeBtn.textContent = original;
+                    }
+                });
+            }
+            // inject CSRF global window.__admin_csrf kalau belum ada (ambil dari hidden input jika ada)
+            if (typeof window.__admin_csrf !== "string" || !window.__admin_csrf) {
+                // Ambill dari form login (atau input csrf yang tersembunyi di page)
+                const hidden = document.querySelector('input[name="csrf_token"]');
+                if (hidden) window.__admin_csrf = (hidden.value || "").toString();
+            }
+        })();
 
         // --- YouTube URL lookup ---
         const youtubeUrl    = document.querySelector("#url");
