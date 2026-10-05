@@ -15,10 +15,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="command", required=True)
     listing = subcommands.add_parser("list", help="Print submissions as JSON")
-    listing.add_argument("--status", choices=("pending", "in_progress", "completed", "failed"))
+    statuses = ("pending", "in_progress", "ready_for_review", "completed", "failed")
+    listing.add_argument("--status", choices=statuses)
     update = subcommands.add_parser("set-status", help="Update a submission after pipeline work")
     update.add_argument("video_id")
-    update.add_argument("status", choices=("pending", "in_progress", "completed", "failed"))
+    update.add_argument("status", choices=statuses)
     args = parser.parse_args()
     if args.command == "list":
         print(json.dumps(list_submissions(status=args.status), ensure_ascii=False, indent=2))

@@ -1362,7 +1362,7 @@
                             <p class="subtitle">Review satu per satu. Upload via API jika quota masih ada, atau lewat YouTube Studio kalau quota habis untuk hari itu.
                             {% if hidden_already_uploaded and hidden_already_uploaded > 0 %}
                                 <span style="color:var(--text-muted);opacity:.9;display:block;margin-top:4px;font-size:.82rem">
-                                    ✅ {{ hidden_already_uploaded }} klip <strong>sudah pernah di-upload sebelumnya</strong> (ada di YouTube Studio / riwayat) — disembunyikan dari panel ini. Lihat status & historynya di <em>Pengajuan terbaru</em> di atas.
+                                    ✅ {{ hidden_already_uploaded }} klip <strong>sudah terkonfirmasi ter-upload</strong> via API/Studio dan disembunyikan dari panel ini. Klip gagal atau kena kuota tetap ditampilkan agar bisa di-retry.
                                 </span>
                             {% else %}
                                 <span style="color:var(--text-muted);opacity:.85;display:block;margin-top:4px;font-size:.82rem">
@@ -1419,6 +1419,10 @@
                                                     <span class="chip chip-indigo">Manual (Studio)</span>
                                                 {% elif s == 'failed' or s == 'error' %}
                                                     <span class="chip chip-danger">Gagal</span>
+                                                {% elif s == 'quota' %}
+                                                    <span class="chip chip-danger">Kuota habis</span>
+                                                {% elif s == 'uploading' %}
+                                                    <span class="chip chip-warning">Sedang upload</span>
                                                 {% elif s == 'queued' %}
                                                     <span class="chip chip-warning">Dalam antrean</span>
                                                 {% else %}
@@ -1444,7 +1448,10 @@
                                             <div class="action-group">
                                                 <form method="post" action="{{ url_for('admin_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}">
                                                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-                                                    <button class="btn btn-primary" type="submit">⬆ Upload API</button>
+                                                    <button class="btn btn-primary" type="submit"
+                                                            {% if clip.upload and clip.upload.status == 'uploading' %}disabled title="Upload sedang berjalan"{% endif %}>
+                                                        {{ '⏳ Sedang upload' if clip.upload and clip.upload.status == 'uploading' else '⬆ Upload API' }}
+                                                    </button>
                                                 </form>
                                                 <button class="btn btn-secondary" type="button"
                                                         data-toggle-details="#manual-{{ clip.podcast }}-{{ clip.episode }}-{{ clip.clip_num }}">
@@ -1837,6 +1844,7 @@
                                         <span class="si-id">submission #{{ item.id }}</span>
                                         <span class="si-title">
                                             {% if item.status == 'completed' %}<i class="status-ok">✓</i>
+                                            {% elif item.status == 'ready_for_review' %}<i class="status-ok">◉</i>
                                             {% elif item.status == 'failed' %}<i class="status-fail">✗</i>
                                             {% elif item.status == 'in_progress' %}<i class="status-warn">⟳</i>
                                             {% else %}<i class="status-pending">⏳</i>{% endif %}
@@ -2047,11 +2055,12 @@
                     const counters = [];
                     if (g.running_count) counters.push(`${g.running_count} berjalan`);
                     if (g.pending_count) counters.push(`${g.pending_count} antre`);
+                    if (g.review_count) counters.push(`${g.review_count} siap direview`);
                     if (g.completed_count) counters.push(`${g.completed_count} selesai`);
                     if (g.failed_count) counters.push(`${g.failed_count} gagal`);
                     const counterWrap = groupEl.querySelector(".sub-group-counters");
                     if (counterWrap) {
-                        const total = (g.running_count||0)+(g.pending_count||0)+(g.completed_count||0)+(g.failed_count||0);
+                        const total = (g.running_count||0)+(g.pending_count||0)+(g.review_count||0)+(g.completed_count||0)+(g.failed_count||0);
                         const finalCounters = counters.length ? counters : [`${total} item`];
                         counterWrap.innerHTML = finalCounters.map(c => `<span class="mini-chip">${c}</span>`).join("");
                     }

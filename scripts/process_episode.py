@@ -64,7 +64,7 @@ def main():
         raise SystemExit(1)
     if result.returncode == 0:
         try:
-            set_submission_status(video_id, "completed")
+            set_submission_status(video_id, "ready_for_review")
         except Exception:  # noqa: BLE001
             pass
         return 0

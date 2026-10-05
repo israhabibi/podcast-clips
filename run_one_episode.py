@@ -13,6 +13,7 @@ from urllib.parse import parse_qs, urlparse
 REPO_ROOT = Path(__file__).resolve().parent
 
 YOUTUBE_ID_RE = re.compile(r"(?:v=|be/)([A-Za-z0-9_-]{11})")
+MEDIA_SUFFIXES = frozenset((".mp4", ".mkv", ".webm", ".mov"))
 
 
 def parse_video_id(url: str):
@@ -39,6 +40,14 @@ def parse_video_id(url: str):
 def ensure_dir(path: Path):
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def source_candidates(episode_dir: Path):
+    """Return completed media files only; ignore yt-dlp sidecars and partial downloads."""
+    return sorted(
+        path for path in episode_dir.glob("source.*")
+        if path.is_file() and path.suffix.lower() in MEDIA_SUFFIXES
+    )
 
 
 def load_hermes_key():
@@ -90,16 +99,24 @@ def main():
         print('Usage: python run_one_episode.py <youtube_url> [podcast_slug] [episode_title]', file=sys.stderr)
         sys.exit(1)
 
+    preflight = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_setup.py"), "--media"],
+        cwd=str(REPO_ROOT),
+        check=False,
+    )
+    if preflight.returncode:
+        raise RuntimeError("Media dependency preflight failed; fix the reported setup errors first")
+
     url = sys.argv[1]
+    video_id = parse_video_id(url)
     podcast_slug = sys.argv[2] if len(sys.argv) > 2 else 'jelasin-dong'
     episode_title = (sys.argv[3].strip() if len(sys.argv) > 3 else '') or f'YouTube episode {video_id}'
-    video_id = parse_video_id(url)
     timestamp = int(time.time())
     # Reuse an existing workdir for this video if it already has source.mp4 (resume-friendly;
     # never re-download — YouTube 403 rate-limits repeated downloads of the same video).
     episode_dir = None
     for d in sorted(Path('/tmp/podcast-clips').glob(f"{video_id}-*")):
-        if d.is_dir() and (d / 'source.mp4').exists():
+        if d.is_dir() and source_candidates(d):
             episode_dir = d
             break
     if episode_dir is None:
@@ -130,15 +147,11 @@ def main():
                 wait = 60 * attempt
                 print(f"[download] attempt {attempt} failed ({exc}); retrying in {wait}s", file=sys.stderr)
                 time.sleep(wait)
-            if source.exists() or any(episode_dir.glob('source.*')):
+            if source_candidates(episode_dir):
                 break
-    candidates = sorted(episode_dir.glob('source.*'))
+    candidates = source_candidates(episode_dir)
     if not source.exists() and candidates:
-        first = candidates[0]
-        if first.suffix != '.mp4':
-            first.rename(source)
-        else:
-            source = first
+        source = candidates[0]
 
     if not source.exists():
         raise RuntimeError(f'Video download did not produce {source}')

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Caption + link berita terkait per klip via LLM + web search."""
-import json, sys, os, urllib.request, urllib.parse
+import json, sys, os, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
@@ -11,6 +11,8 @@ if not KEY:
             for line in f:
                 if line.startswith("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY="):
                     KEY = line.strip().split("=", 1)[1].strip().strip('"')
+if not KEY:
+    sys.exit("API key not found")
 
 WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
 if not WORK_DIR_VALUE:
@@ -27,20 +29,26 @@ LLM_MODEL = os.environ.get("CAPTION_LLM_MODEL", "MiniMax-M2.7-highspeed")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "300"))
 
 def llm(prompt):
-    req = urllib.request.Request(
-        "https://ai.sumopod.com/v1/chat/completions",
-        data=json.dumps({"model": LLM_MODEL,
-                         "messages": [{"role": "user", "content": prompt}],
-                         "temperature": 0.3}).encode(),
-        headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
-    try:
-        return json.load(urllib.request.urlopen(req, timeout=LLM_TIMEOUT))["choices"][0]["message"]["content"]
-    except urllib.error.URLError as e:
-        print(f"  LLM request failed: {e}")
-        return ""
-    except json.JSONDecodeError as e:
-        print(f"  LLM response not valid JSON: {e}")
-        return ""
+    last_error = None
+    for attempt in range(1, 4):
+        req = urllib.request.Request(
+            "https://ai.sumopod.com/v1/chat/completions",
+            data=json.dumps({"model": LLM_MODEL,
+                             "messages": [{"role": "user", "content": prompt}],
+                             "temperature": 0.3}).encode(),
+            headers={"Authorization": f"Bearer {KEY}", "Content-Type": "application/json"})
+        try:
+            response = json.load(urllib.request.urlopen(req, timeout=LLM_TIMEOUT))
+            content = response["choices"][0]["message"]["content"]
+            if not isinstance(content, str) or not content.strip():
+                raise ValueError("LLM returned empty content")
+            return content.strip()
+        except (urllib.error.URLError, json.JSONDecodeError, KeyError, IndexError, TypeError, ValueError) as exc:
+            last_error = exc
+            print(f"  LLM attempt {attempt}/3 failed: {exc}", file=sys.stderr)
+            if attempt < 3:
+                time.sleep(attempt)
+    raise RuntimeError(f"LLM request failed after 3 attempts: {last_error}")
 
 results = {}
 search_file = WORK_DIR / "search_results.json"
@@ -75,6 +83,14 @@ Balas HANYA caption-nya.""")
     results[str(i)] = {"clip": clip_filename, "title": c["title"], "caption": cap, "query": q}
     print(f"  caption: {cap[:100]}")
 
-with open(WORK_DIR / "captions.json", "w") as f:
-    json.dump(results, f, ensure_ascii=False, indent=2)
+descriptor, temporary = tempfile.mkstemp(prefix=".captions-", suffix=".json", dir=WORK_DIR)
+try:
+    with os.fdopen(descriptor, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(temporary, WORK_DIR / "captions.json")
+finally:
+    if os.path.exists(temporary):
+        os.unlink(temporary)
 print("\nsaved captions.json")

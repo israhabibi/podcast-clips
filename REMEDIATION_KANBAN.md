@@ -6,7 +6,7 @@
 
 | Ready | Waiting / blocked | In progress | Review | Done |
 | --- | --- | --- | --- | --- |
-| [PIPE-02](#pipe-02-add-episode-lifecycle-and-retry)<br>[PIPE-03](#pipe-03-validate-clip-metadata)<br>[WEB-01](#web-01-correct-gallery-routing-and-title)<br>[MEDIA-01](#media-01-fix-face-track-fallback)<br>[OPS-01](#ops-01-make-setup-reproducible)<br>[ADMIN-01](#admin-01-add-top-5-compilation-ui) | [PIPE-04](#pipe-04-fail-incomplete-batches) after PIPE-03<br>[PUB-01](#pub-01-add-review-gate-and-upload-idempotency) after PIPE-04 and SEC-02<br>[QA-01](#qa-01-add-regression-tests) alongside completed code tasks<br>[OPS-02](#ops-02-enforce-server-side-branch-protection) requires repository administrator access | [SEC-01](#sec-01-protect-oauth-routes-and-session-secret)<br>[SEC-02](#sec-02-harden-oauth-callbacks-and-token-replacement) | None | [PIPE-01](#pipe-01-fix-tiktok-caption-path) |
+| [PIPE-02](#pipe-02-add-episode-lifecycle-and-retry)<br>[PIPE-03](#pipe-03-validate-clip-metadata)<br>[MEDIA-01](#media-01-fix-face-track-fallback)<br>[ADMIN-01](#admin-01-add-top-5-compilation-ui) | [PIPE-04](#pipe-04-fail-incomplete-batches) after PIPE-03<br>[PUB-01](#pub-01-add-review-gate-and-upload-idempotency) after PIPE-04 and SEC-02<br>[QA-01](#qa-01-add-regression-tests) alongside completed code tasks<br>[OPS-02](#ops-02-enforce-server-side-branch-protection) requires repository administrator access<br>[SEC-02](#sec-02-harden-oauth-callbacks-and-token-replacement) needs expected TikTok identity/consent verification | [SEC-01](#sec-01-protect-oauth-routes-and-session-secret) | [WEB-01](#web-01-correct-gallery-routing-and-title)<br>[OPS-01](#ops-01-make-setup-reproducible) | [PIPE-01](#pipe-01-fix-tiktok-caption-path) |
 
 Move a task ID to **In progress** when work starts, to **Review** when its code and verification are ready, and to **Done** only when every acceptance checkbox is satisfied. Keep blockers in the task card. If a task needs a design choice, record the choice in the PR or an implementation note rather than silently changing the contract. Work on the `hermes-skill/scripts/` mirror whenever a mirrored script changes.
 
@@ -138,6 +138,8 @@ Move a task ID to **In progress** when work starts, to **Review** when its code 
 - [ ] A missing or incomplete episode returns 404, never another episode's content.
 - [ ] One malformed JSON file does not take down all gallery pages.
 
+**Progress (2026-10-05):** Explicit episode URLs now return 404 for malformed metadata, mismatched caption/clip entries, and missing media. The index skips incomplete episodes. Regression coverage added; pending review.
+
 ### MEDIA-01 Fix face-track fallback
 
 - **Priority:** P2
@@ -176,6 +178,8 @@ Move a task ID to **In progress** when work starts, to **Review** when its code 
 - [ ] A clean environment can install the documented dependencies and run tests.
 - [ ] Missing model or CLI tools are reported before a render starts.
 - [ ] The README does not promise capabilities that setup does not provide.
+
+**Progress (2026-10-05):** Exact direct dependency versions are pinned; Gunicorn entry point/config and a systemd unit template are added. `scripts/check_setup.py` checks web or media prerequisites, and the episode runner invokes media preflight before downloading. Pending review and a clean-environment install check.
 
 ### OPS-02 Enforce server-side branch protection
 

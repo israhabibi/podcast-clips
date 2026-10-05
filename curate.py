@@ -126,6 +126,7 @@ def call_llm():
 # are common; the worker aborts the whole episode otherwise.
 MAX_CURATE_ATTEMPTS = 3
 content = None
+validated_data = None
 for attempt in range(1, MAX_CURATE_ATTEMPTS + 1):
     content = call_llm()
     # Extract JSON object (may be wrapped in ``` or just raw)
@@ -140,7 +141,11 @@ for attempt in range(1, MAX_CURATE_ATTEMPTS + 1):
             raise ValueError("missing episode_summary or x_post.text")
         if not 6 <= len(_clips) <= 12:
             raise ValueError(f"got {len(_clips)} clips; expected 6-12")
-        validate_clips(_clips, segs, min_duration=35, max_duration=75)  # lenient: LLM often lands just outside 40-70
+        _clips = validate_clips(
+            _clips, segs, min_duration=35, max_duration=75
+        )  # lenient: LLM often lands just outside 40-70
+        candidate["clips"] = _clips
+        validated_data = candidate
         break  # fully valid
     except (ValueError, json.JSONDecodeError) as exc:
         print(f"[curate] attempt {attempt}/{MAX_CURATE_ATTEMPTS} invalid: {exc}", file=sys.stderr)
@@ -148,11 +153,9 @@ for attempt in range(1, MAX_CURATE_ATTEMPTS + 1):
             sys.exit(f"curate failed after {MAX_CURATE_ATTEMPTS} attempts: {exc}")
         content = None
 
-# Re-extract from the last valid content (validate passed)
-start = content.index('{')
-end = content.rindex('}') + 1
-content = content[start:end]
-data = json.loads(content)
+# Use the normalized object that passed validation. Re-parsing the raw LLM
+# response here would discard snapped timestamps and repaired hooks/titles.
+data = validated_data
 
 episode_summary = data.get("episode_summary", "")
 x_post = data.get("x_post", {})

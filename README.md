@@ -73,7 +73,27 @@ cd ~/podcast-clips
 uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
+python scripts/check_setup.py
 ```
+
+The setup check validates the Python packages, `ffmpeg`/`ffprobe`, `yt-dlp`, the YuNet ONNX face model, and the DejaVu subtitle font. Set `FACE_YUNET_MODEL`, `PODCAST_FONT_DIR`, or `PODCAST_FONT_FILE` when these assets are installed elsewhere. The media preflight also runs before an episode download starts:
+
+```bash
+python scripts/check_setup.py --media
+```
+
+### Production web service
+
+The repository includes a Gunicorn WSGI entry point and service template. Install the pinned requirements, confirm `app/.env` and `~/.hermes/.env` are readable by the service user, then install/reload the user service:
+
+```bash
+cp deploy/flask-app.service ~/.config/systemd/user/flask-app.service
+systemctl --user daemon-reload
+systemctl --user enable --now flask-app
+systemctl --user status flask-app --no-pager
+```
+
+Gunicorn listens on `127.0.0.1:5000`; keep the existing HTTPS reverse proxy/tunnel in front of it. Its startup check validates web dependencies before the service starts.
 
 ### Admin page
 
@@ -102,11 +122,12 @@ The existing pipeline agent can read and update the queue with:
 ```bash
 python scripts/admin_queue.py list --status pending
 python scripts/admin_queue.py set-status VIDEO_ID in_progress
+python scripts/admin_queue.py set-status VIDEO_ID ready_for_review
 python scripts/admin_queue.py set-status VIDEO_ID completed
 # Use failed if processing does not succeed.
 ```
 
-Set `ADMIN_DB_PATH` to an absolute path if the web app and pipeline run from different working directories on the same machine; both must use the same database. A separate-host deployment needs a shared queue or database service instead of this local SQLite file. Mark an item `completed` only after the existing review and delivery workflow succeeds. The admin page shows the latest 50 submissions and their status.
+Set `ADMIN_DB_PATH` to an absolute path if the web app and pipeline run from different working directories on the same machine; both must use the same database. A separate-host deployment needs a shared queue or database service instead of this local SQLite file. The episode worker sets `ready_for_review` after local clips and captions are generated. Mark an item `completed` only after the review and delivery workflow succeeds. The admin page shows the latest 50 submissions and their status.
 
 Run `python -m unittest test_admin test_pipeline` before deploying changes to the admin routes.
 

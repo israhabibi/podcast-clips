@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Cut klip dengan auto-reframe: crop 9:16 ngikutin pembicara (YuNet face detect)."""
-import json, subprocess, os, sys, tempfile, math
+import json, subprocess, os, sys, tempfile, math, shutil
 from pathlib import Path
 
-FFMPEG = "/usr/bin/ffmpeg"
-FFPROBE = "/usr/bin/ffprobe"
+FFMPEG = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
+FFPROBE = shutil.which("ffprobe") or "/usr/bin/ffprobe"
 import cv2
 import numpy as np
 from scipy.interpolate import CubicSpline
@@ -43,10 +43,19 @@ search_results_path = WORK_DIR / "search_results.json"
 search_results = json.loads(search_results_path.read_text(encoding="utf-8")) if search_results_path.exists() else {}
 if not isinstance(search_results, dict):
     sys.exit("search_results.json must be an object keyed by clip number")
-FONT = "DejaVuSans-Bold"
+FONT_DIR = Path(os.environ.get("PODCAST_FONT_DIR", "/usr/share/fonts/truetype/dejavu"))
+FONT_FILE = Path(os.environ.get("PODCAST_FONT_FILE", str(FONT_DIR / "DejaVuSans-Bold.ttf")))
+FONT = "DejaVu Sans"
+MODEL_FILE = Path(os.environ.get("FACE_YUNET_MODEL", "/tmp/face_yunet.onnx")).expanduser()
+if not Path(FFMPEG).is_file() or not Path(FFPROBE).is_file():
+    sys.exit("ffmpeg and ffprobe must be installed and available on PATH")
+if not FONT_FILE.is_file():
+    sys.exit(f"Subtitle font not found: {FONT_FILE}; set PODCAST_FONT_FILE or PODCAST_FONT_DIR")
+if not MODEL_FILE.is_file() or MODEL_FILE.stat().st_size == 0:
+    sys.exit(f"YuNet face detector model not found or empty: {MODEL_FILE}; set FACE_YUNET_MODEL")
 
 try:
-    det = cv2.FaceDetectorYN.create("/tmp/face_yunet.onnx", "", (320, 320), 0.6)
+    det = cv2.FaceDetectorYN.create(str(MODEL_FILE), "", (320, 320), 0.6)
 except Exception as exc:
     sys.exit(f"Cannot load face detector model: {exc}")
 
@@ -256,7 +265,7 @@ for i, c in enumerate(clips, 1):
     last_x = max(min_crop_x, min(max_crop_x, track[-1][1] - crop_w / 2))
     xexpr = "".join(exprs) + f"{last_x:.0f}" + ")" * len(exprs)
     vf = (f"crop={crop_w}:ih:'{xexpr}':0,scale=1080:1920,"
-          f"ass={subs_file}:fontsdir=/usr/share/fonts/truetype/dejavu")
+          f"ass={subs_file}:fontsdir={FONT_FILE.parent}")
     out_name = str(c.get("filename")) if isinstance(c.get("filename"), str) and c.get("filename").strip() else f"clip{i:02d}.mp4"
     if Path(out_name).name != out_name:  # just be safe: clip["filename"] must be plain basename, no path sep
         out_name = Path(out_name).name

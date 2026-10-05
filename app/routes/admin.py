@@ -19,7 +19,7 @@ from app.admin_security import admin_configured, admin_required, check_csrf, csr
 from app.admin_store import (
     PODCASTS, add_submission, clear_login_attempts, login_blocked,
     recent_submissions, record_failed_login, set_submission_status,
-    record_youtube_upload, get_youtube_upload, record_manual_upload,
+    record_youtube_upload, claim_youtube_upload, get_youtube_upload, record_manual_upload,
     deployed_clip_metadata, get_setting, set_setting, delete_setting,
     get_llm_config, save_llm_config,
 )
@@ -215,6 +215,8 @@ def _job_progress(item):
         return {"label": "Menunggu", "stage": "Dalam antrean", "percent": 0}
     if status == "completed":
         return {"label": "Selesai", "stage": "Selesai", "percent": 100}
+    if status == "ready_for_review":
+        return {"label": "Siap direview", "stage": "Klip lokal siap direview", "percent": 100}
     if status == "failed":
         return {"label": "Gagal", "stage": "Perlu diperiksa", "percent": 100}
 
@@ -266,6 +268,7 @@ def _group_submissions_by_video(submission_items):
                 "worst_status": submission.get("status") or "pending",
                 "worst_progress": submission.get("progress") or {"stage": "-", "label": "Tunggu", "percent": 0},
                 "running_count": 0,
+                "review_count": 0,
                 "completed_count": 0,
                 "failed_count": 0,
                 "pending_count": 0,
@@ -280,6 +283,7 @@ def _group_submissions_by_video(submission_items):
             "in_progress": 100,
             "pending": 50,
             "failed": 25,
+            "ready_for_review": 10,
             "completed": 0,
         }.get(status, 10)
         if weight > g["worst_status_weight"]:
@@ -289,6 +293,8 @@ def _group_submissions_by_video(submission_items):
         g["max_percent"] = max(g["max_percent"], int(progress.get("percent") or 0))
         if status == "in_progress":
             g["running_count"] += 1
+        elif status == "ready_for_review":
+            g["review_count"] += 1
         elif status == "completed":
             g["completed_count"] += 1
         elif status == "failed":
@@ -301,8 +307,11 @@ def _group_submissions_by_video(submission_items):
         if ca and ca > (g["last_created"] or ca):
             g["last_created"] = ca
         g["submissions"].append(submission)
-    # Sort: any running first → pending → failed → completed; inside same sort by last_created desc
-    STATUS_ORDER = {"in_progress": 0, "pending": 1, "failed": 2, "completed": 3}
+    # Sort: active work first, then failures/review, then legacy completed rows.
+    STATUS_ORDER = {
+        "in_progress": 0, "pending": 1, "failed": 2,
+        "ready_for_review": 3, "completed": 4,
+    }
     def sort_key(vid):
         g = groups[vid]
         return (STATUS_ORDER.get(g["worst_status"], 9), -(g["running_count"]), g["last_created"] or "")
@@ -312,6 +321,7 @@ def _group_submissions_by_video(submission_items):
         "in_progress": ("Berjalan", "chip chip-warning"),
         "pending":     ("Antrean",  "chip chip-info"),
         "failed":      ("Gagal",    "chip chip-danger"),
+        "ready_for_review": ("Siap direview", "chip chip-info"),
         "completed":   ("Selesai",  "chip chip-success"),
     }
     out_groups = []
@@ -322,8 +332,8 @@ def _group_submissions_by_video(submission_items):
         # instead build new_group cleanly using dedicated "items" key only after all dict-method iterations are done.
         submission_list = list(g["submissions"])
         label, cls = STATUS_LABEL.get(g["worst_status"], STATUS_LABEL["pending"])
-        rc = g["running_count"]; cc = g["completed_count"]; fc = g["failed_count"]; pc = g["pending_count"]
-        if rc and not cc and not fc and not pc:
+        rc = g["running_count"]; vc = g["review_count"]; cc = g["completed_count"]; fc = g["failed_count"]; pc = g["pending_count"]
+        if rc and not vc and not cc and not fc and not pc:
             label = f"Berjalan ({rc})"
         elif g["worst_status"] == "completed":
             label = f"Selesai ({cc})"
@@ -331,6 +341,8 @@ def _group_submissions_by_video(submission_items):
             label = f"Antrean ({pc})"
         elif g["worst_status"] == "failed":
             label = f"Gagal ({fc})"
+        elif g["worst_status"] == "ready_for_review":
+            label = f"Siap direview ({vc})"
         else:
             totals = rc + pc
             if totals > 1:
@@ -338,6 +350,7 @@ def _group_submissions_by_video(submission_items):
         counters = []
         if rc: counters.append(f"{rc} berjalan")
         if pc: counters.append(f"{pc} antre")
+        if vc: counters.append(f"{vc} siap direview")
         if cc: counters.append(f"{cc} selesai")
         if fc: counters.append(f"{fc} gagal")
         new_group = {
@@ -345,7 +358,8 @@ def _group_submissions_by_video(submission_items):
             "title": g["title"],
             "first_created": g["first_created"], "last_created": g["last_created"],
             "worst_status": g["worst_status"], "worst_progress": dict(g["worst_progress"]),
-            "running_count": rc, "completed_count": cc, "failed_count": fc, "pending_count": pc,
+            "running_count": rc, "review_count": vc, "completed_count": cc,
+            "failed_count": fc, "pending_count": pc,
             "max_percent": g["max_percent"],
             "group_status_label": label, "group_status_class": cls, "counters": counters,
             "items": submission_list,
@@ -386,6 +400,39 @@ def _compilation_workdir(episode_id):
     if not workdir.is_dir() or not (workdir / "source.mp4").is_file() or not (workdir / "transcript.json").is_file():
         return None
     return workdir
+
+
+def _compilation_lock_path(workdir):
+    return workdir / ".compilation-build.lock"
+
+
+def _compilation_is_locked(workdir):
+    """Return True for an active build; discard locks older than six hours."""
+    lock_path = _compilation_lock_path(workdir)
+    try:
+        if time.time() - lock_path.stat().st_mtime > 6 * 60 * 60:
+            lock_path.unlink()
+            return False
+        return True
+    except FileNotFoundError:
+        return False
+    except OSError:
+        return True
+
+
+def _acquire_compilation_lock(workdir, job_id):
+    lock_path = _compilation_lock_path(workdir)
+    if _compilation_is_locked(workdir):
+        return None
+    try:
+        descriptor = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        return None
+    with os.fdopen(descriptor, "w", encoding="utf-8") as lock_file:
+        lock_file.write(job_id)
+        lock_file.flush()
+        os.fsync(lock_file.fileno())
+    return lock_path
 
 
 TOP5_CLIP_NUM = "99"  # Reserved clip_num slot for Top 5 compilation
@@ -657,10 +704,12 @@ def admin_page():
     sub_per_page = _coerce_int(request.args.get("sub_per_page"), DEFAULT_PER_PAGE)
 
     all_clips_full = _deployed_clips()
-    # Hanya TAMPILKAN di panel "Klip YouTube siap upload" klip yang BELUM PERNAH ada record upload di youtube_uploads (barang baru, belum diapa-apakan).
-    # Klip yang sudah pernah di-upload / gagal upload / quota habis / in-progress semua disembunyikan dari panel ini;
-    # user bisa melihat historynya di section Pengajuan terbaru.
-    all_clips = [c for c in all_clips_full if c.get("upload") is None]
+    # Keep failed/quota rows visible so the operator has a retry path. Only
+    # confirmed API/manual uploads are removed from the ready-to-upload panel.
+    all_clips = [
+        c for c in all_clips_full
+        if not c.get("upload") or c["upload"].get("status") not in ("uploaded", "manual")
+    ]
     total_deployed_clips_count = len(all_clips_full)
     hidden_already_uploaded = total_deployed_clips_count - len(all_clips)
     clips_base_args = {
@@ -840,8 +889,9 @@ def admin_jobs():
             "label": g["worst_progress"].get("label", ""),
             "percent": g["max_percent"],
             "running_count": g["running_count"],
-            "pending_count": g["pending_count"],
-            "completed_count": g["completed_count"],
+                "pending_count": g["pending_count"],
+                "review_count": g["review_count"],
+                "completed_count": g["completed_count"],
             "failed_count": g["failed_count"],
         }
         for g in grouped
@@ -1016,27 +1066,37 @@ def admin_compilation_build():
     except (KeyError, TypeError, ValueError):
         return jsonify(error="Each moment needs valid start, end, and label values."), 400
 
-    job_id = f"compilation-{workdir.name}-{int(time.time())}"
+    job_id = f"compilation-{workdir.name}-{int(time.time())}-{secrets.token_hex(4)}"
+    lock_path = _acquire_compilation_lock(workdir, job_id)
+    if lock_path is None:
+        return jsonify(error="Build kompilasi lain masih berjalan untuk episode ini."), 409
     config_path = workdir / f".{job_id}.json"
-    output_path = workdir / "clips" / "top5_compilation.mp4"
-    config_path.write_text(json.dumps({
-        "header_l1": str(payload.get("header_l1", "TOP 5 MOMEN"))[:80],
-        "header_l2": str(payload.get("header_l2", ""))[:80],
-        "subheader": str(payload.get("subheader", ""))[:120],
-        "items": normalized_items,
-        "segs": segments,
-        "auto_warning": auto_warning,
-        "total_duration_seconds": round(total_dur, 2),
-    }, ensure_ascii=False), encoding="utf-8")
+    final_output_path = workdir / "clips" / "top5_compilation.mp4"
+    job_output_path = workdir / "clips" / f".{job_id}.mp4"
     log_dir = Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs"))
-    log_dir.mkdir(parents=True, exist_ok=True)
     log_path = log_dir / f"{job_id}.log"
-    command = [sys.executable, str(REPO_ROOT / "scripts" / "build_compilation.py"), str(workdir), str(output_path), str(config_path), str(log_path)]
     try:
+        config_path.write_text(json.dumps({
+            "header_l1": str(payload.get("header_l1", "TOP 5 MOMEN"))[:80],
+            "header_l2": str(payload.get("header_l2", ""))[:80],
+            "subheader": str(payload.get("subheader", ""))[:120],
+            "items": normalized_items,
+            "segs": segments,
+            "auto_warning": auto_warning,
+            "total_duration_seconds": round(total_dur, 2),
+        }, ensure_ascii=False), encoding="utf-8")
+        log_dir.mkdir(parents=True, exist_ok=True)
+        command = [
+            sys.executable, str(REPO_ROOT / "scripts" / "build_compilation.py"),
+            str(workdir), str(job_output_path), str(final_output_path),
+            str(config_path), str(log_path), str(lock_path),
+        ]
         subprocess.Popen(command, cwd=str(REPO_ROOT), start_new_session=True,
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          env={**os.environ, "PYTHONUNBUFFERED": "1"})
     except OSError:
+        lock_path.unlink(missing_ok=True)
+        job_output_path.unlink(missing_ok=True)
         return jsonify(error="Could not start compilation worker."), 503
     return jsonify(job_id=job_id, output=f"/admin/compilation/preview/{workdir.name}",
                    total_duration_seconds=round(total_dur, 2),
@@ -1047,6 +1107,8 @@ def admin_compilation_build():
 @admin_required()
 def admin_compilation_preview(episode_id):
     workdir = _compilation_workdir(episode_id)
+    if workdir is not None and _compilation_is_locked(workdir):
+        return "Compilation build in progress", 409
     output_path = workdir / "clips" / "top5_compilation.mp4" if workdir else None
     if output_path is None or not output_path.is_file():
         return "Compilation not ready", 404
@@ -1092,9 +1154,8 @@ def admin_compilation_status(episode_id):
             base["upload_url"] = f"https://youtube.com/watch?v={upload_info['video_id']}"
     else:
         base["upload_status"] = None
-    if output_path.is_file():
-        base["status"] = "completed"
-        base["preview"] = url_for("admin_compilation_preview", episode_id=episode_id)
+    if _compilation_is_locked(workdir):
+        base["status"] = "running"
         return jsonify(**base)
     log_files = sorted(Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs")).glob(f"compilation-{episode_id}-*.log"))
     if log_files:
@@ -1102,7 +1163,13 @@ def admin_compilation_status(episode_id):
         if "EXIT_CODE=" in log_text and not log_text.rstrip().endswith("EXIT_CODE=0"):
             base["status"] = "failed"
             return jsonify(**base)
-        base["status"] = "running"
+        if "EXIT_CODE=" not in log_text:
+            base["status"] = "failed"
+            base["error"] = "Build worker stopped before recording an exit code."
+            return jsonify(**base)
+    if output_path.is_file():
+        base["status"] = "completed"
+        base["preview"] = url_for("admin_compilation_preview", episode_id=episode_id)
         return jsonify(**base)
     base["status"] = "idle"
     return jsonify(**base)
@@ -1112,6 +1179,8 @@ def _deploy_compilation(episode_id):
     workdir = _compilation_workdir(episode_id)
     if workdir is None:
         return None, "Workspace episode tidak valid."
+    if _compilation_is_locked(workdir):
+        return None, "Build kompilasi masih berjalan; tunggu sampai preview baru selesai."
     src = workdir / "clips" / "top5_compilation.mp4"
     if not src.is_file():
         return None, "Kompilasi belum di-render (file top5_compilation.mp4 tidak ada di workspace)."
@@ -1337,10 +1406,17 @@ def admin_compilation_upload(episode_id):
                  "compilation": True},
         clip_path=deployed,
     ) or {}
-    record_youtube_upload(
-        meta["podcast"], episode_folder, TOP5_CLIP_NUM, "uploading",
+    claimed, current = claim_youtube_upload(
+        meta["podcast"], episode_folder, TOP5_CLIP_NUM,
         sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
     )
+    if not claimed:
+        current_status = (current or {}).get("status", "uploading")
+        msg = f"Upload tidak dimulai karena status saat ini: {current_status}."
+        if accept_json:
+            return jsonify(error=msg, status=current_status), 409
+        flash(msg, "error")
+        return redirect(url_for("admin_top5"))
     try:
         from scripts.youtube_upload import upload_clip
         result = upload_clip(str(deployed), caption_title, caption_desc.strip(), tags=tags)
@@ -1445,12 +1521,21 @@ def admin_upload_clip(podcast, episode, clip_num):
         vid = existing.get("video_id") or ""
         flash(f"Clip sudah di-upload ({existing['status']}): {vid}", "success")
         return redirect(url_for("admin_page"))
+    if existing and existing.get("status") == "uploading":
+        flash("Upload klip ini sedang berjalan. Tunggu statusnya berubah sebelum retry.", "error")
+        return redirect(url_for("admin_page"))
     clip_path, caption = clip
     meta = deployed_clip_metadata(podcast, episode, clip_num, caption=caption, clip_path=clip_path) or {}
-    record_youtube_upload(
-        podcast, episode, clip_num, "uploading",
+    claimed, current = claim_youtube_upload(
+        podcast, episode, clip_num,
         sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0),
     )
+    if not claimed:
+        flash(
+            f"Upload tidak dimulai karena status saat ini: {(current or {}).get('status', 'uploading')}.",
+            "error",
+        )
+        return redirect(url_for("admin_page"))
     tags = ["shorts", "podcast", "indonesia", podcast, "tempo", "berita", "politik", "viral", "fyp", "news", "video", "opini", "analisis", "terkini", "podcastindonesia"]
     try:
         from scripts.youtube_upload import upload_clip

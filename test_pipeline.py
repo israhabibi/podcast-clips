@@ -13,7 +13,7 @@ Cakupan:
   7. Edge cases (file tidak ada, path traversal, invalid input)
 """
 
-import sys, os, json, tempfile, unittest, logging, importlib.util
+import sys, os, io, json, runpy, tempfile, unittest, logging, importlib.util
 import subprocess
 from contextlib import redirect_stdout
 from pathlib import Path
@@ -202,6 +202,34 @@ class TestFlaskApp(unittest.TestCase):
         r = self.client.get('/clips/unknown-podcast/ep1')
         self.assertEqual(r.status_code, 404)
 
+    def test_explicit_gallery_episode_never_falls_back(self):
+        from app.routes import clips
+        with tempfile.TemporaryDirectory() as temp_dir:
+            podcast_dir = Path(temp_dir) / 'jelasin-dong'
+            episode_dir = podcast_dir / 'episode-valid'
+            episode_dir.mkdir(parents=True)
+            (episode_dir / 'captions.json').write_text(json.dumps({
+                '1': {'clip': 'clip1.mp4', 'title': 'Episode yang benar'}
+            }))
+            (episode_dir / 'clips.json').write_text(json.dumps([{
+                'start': 0, 'end': 30, 'title': 'Klip benar', 'hook': 'Hook benar'
+            }]))
+            (episode_dir / 'episode_data.json').write_text(json.dumps({'episode_title': 'Episode yang benar'}))
+            (episode_dir / 'clip1.mp4').write_bytes(b'video')
+
+            with patch.object(clips, 'CLIPS_DIR', temp_dir):
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 200)
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-missing').status_code, 404)
+                (episode_dir / 'captions.json').write_text('{broken json')
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 404)
+                (episode_dir / 'captions.json').write_text(json.dumps({
+                    '1': {'clip': 'clip1.mp4', 'title': 'Episode yang benar'}
+                }))
+                (episode_dir / 'clip1.mp4').unlink()
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 404)
+                # Invalid episodes are omitted from the gallery listing too.
+                self.assertNotIn(b'episode-valid', self.client.get('/').data)
+
     def test_oauth_auth_route(self):
         r = self.client.get('/auth')
         self.assertEqual(r.status_code, 302)
@@ -262,11 +290,42 @@ class TestCurateScript(unittest.TestCase):
         os.remove(self.tmp / "transcript.json")
         sys.argv = ['curate.py', 'test-model', 'jelasin-dong', 'Test Episode']
         with self.assertRaises(FileNotFoundError):
-            exec(open(REPO_DIR / 'curate.py').read())
+            source = (REPO_DIR / 'curate.py').read_text(encoding='utf-8')
+            exec(compile(source, str(REPO_DIR / 'curate.py'), 'exec'))
 
     def test_podcast_slug_default(self):
         # Should use 'unknown' when no slug given
         pass  # Validated at runtime only
+
+    def test_curate_persists_snapped_validated_clips(self):
+        segments = [
+            {"start": float(start), "end": float(start + 10), "text": f"Segment {start}"}
+            for start in range(0, 100, 10)
+        ]
+        (self.tmp / "transcript.json").write_text(json.dumps(segments), encoding="utf-8")
+        generated = {
+            "episode_summary": "Ringkasan episode.",
+            "x_post": {"text": "Hook episode", "hashtags": ["#podcast"]},
+            "clips": [
+                {
+                    "start": 0.8,
+                    "end": 40.7,
+                    "title": f"Moment {index}",
+                    "hook": "Hook yang tidak ada di transkrip",
+                }
+                for index in range(1, 7)
+            ],
+        }
+        api_response = {
+            "choices": [{"message": {"content": json.dumps(generated)}}]
+        }
+        with patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(api_response).encode())):
+            with patch.object(sys, "argv", ["curate.py", "ignored", "jelasin-dong", "Test Episode"]):
+                runpy.run_path(str(REPO_DIR / "curate.py"), run_name="__main__")
+
+        saved = json.loads((self.tmp / "clips.json").read_text(encoding="utf-8"))
+        self.assertEqual((saved[0]["start"], saved[0]["end"]), (0.0, 40.0))
+        self.assertEqual(saved[0]["hook"], "Segment 0")
 
 
 class TestCaptionScript(unittest.TestCase):
@@ -298,6 +357,73 @@ class TestCaptionScript(unittest.TestCase):
             data = json.load(f)
         for key in data:
             self.assertIsInstance(key, str)
+
+    def test_missing_api_key_exits_without_writing_captions(self):
+        env = os.environ.copy()
+        env.pop("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", None)
+        env["PODCAST_WORK_DIR"] = str(self.tmp)
+        with tempfile.TemporaryDirectory() as fake_home:
+            env["HOME"] = fake_home
+            result = subprocess.run(
+                [sys.executable, str(REPO_DIR / "caption.py")],
+                cwd=REPO_DIR,
+                env=env,
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("API key not found", result.stderr)
+        self.assertFalse((self.tmp / "captions.json").exists())
+
+
+class TestEpisodeRunner(unittest.TestCase):
+    def test_source_candidates_ignore_partial_downloads(self):
+        from run_one_episode import source_candidates
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "source.mp4.part").write_bytes(b"partial")
+            (root / "source.ytdl").write_bytes(b"state")
+            media = root / "source.webm"
+            media.write_bytes(b"complete")
+            self.assertEqual(source_candidates(root), [media])
+
+
+class TestCompilationWorker(unittest.TestCase):
+    def test_success_replaces_final_output_atomically_and_releases_lock(self):
+        from scripts import build_compilation
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workdir = root / "episode"
+            workdir.mkdir()
+            job_output = workdir / "clips" / ".job.mp4"
+            final_output = workdir / "clips" / "top5_compilation.mp4"
+            config = workdir / ".job.json"
+            log = root / "job.log"
+            lock = workdir / ".compilation-build.lock"
+            config.write_text("{}", encoding="utf-8")
+            lock.write_text("job", encoding="utf-8")
+
+            def render(*args, **kwargs):
+                job_output.parent.mkdir(parents=True, exist_ok=True)
+                job_output.write_bytes(b"new compilation")
+                return type("Result", (), {"returncode": 0})()
+
+            argv = [
+                "build_compilation.py", str(workdir), str(job_output),
+                str(final_output), str(config), str(log), str(lock),
+            ]
+            with patch.object(sys, "argv", argv), patch.object(
+                build_compilation.subprocess, "run", side_effect=render
+            ):
+                self.assertIsNone(build_compilation.main())
+
+            self.assertEqual(final_output.read_bytes(), b"new compilation")
+            self.assertFalse(job_output.exists())
+            self.assertFalse(lock.exists())
+            self.assertIn("EXIT_CODE=0", log.read_text(encoding="utf-8"))
 
 
 class TestCutSmartScript(unittest.TestCase):
@@ -428,6 +554,39 @@ class TestUploadScripts(unittest.TestCase):
                         status = module.main(["all"])
                 self.assertEqual(status, 0)
                 self.assertEqual(upload.call_count, 2)
+
+    def test_tiktok_batch_returns_failure_when_any_upload_fails(self):
+        module = self.load_tiktok_uploader("scripts/tiktok_upload.py")
+        with patch.object(
+            module,
+            "upload_clip",
+            side_effect=[{"status": "inbox"}, {"error": "API rejected upload"}],
+        ):
+            with redirect_stdout(StringIO()):
+                status = module.main(["all"])
+        self.assertEqual(status, 1)
+
+    def test_youtube_batch_returns_failure_when_any_upload_fails(self):
+        module_name = "youtube_upload_test_status"
+        spec = importlib.util.spec_from_file_location(
+            module_name, REPO_DIR / "scripts/youtube_upload.py"
+        )
+        module = importlib.util.module_from_spec(spec)
+        token_path = self.tmp / "youtube-token.json"
+        token_path.write_text("{}", encoding="utf-8")
+        with patch.dict(os.environ, {
+            "PODCAST_WORK_DIR": str(self.tmp),
+            "YOUTUBE_TOKEN_FILE": str(token_path),
+        }):
+            spec.loader.exec_module(module)
+        with patch.object(
+            module,
+            "upload_clip",
+            side_effect=[{"url": "https://youtu.be/abcdefghijk"}, {"error": "quota"}],
+        ):
+            with redirect_stdout(StringIO()):
+                status = module.main(["all"])
+        self.assertEqual(status, 1)
 
     def test_tiktok_upload_shim_forwards(self):
         """Shim in hermes-skill/scripts/tiktok_upload.py forwards to the real script

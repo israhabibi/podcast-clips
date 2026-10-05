@@ -1,0 +1,10 @@
+bind = "127.0.0.1:5000"
+workers = 2
+worker_class = "gthread"
+threads = 4
+timeout = 900
+graceful_timeout = 30
+keepalive = 5
+accesslog = "-"
+errorlog = "-"
+forwarded_allow_ips = "127.0.0.1"
