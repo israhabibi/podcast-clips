@@ -15,7 +15,10 @@ args = parser.parse_args()
 D = os.path.abspath(args.workdir)
 SRC = os.path.join(D, "source.mp4")
 OUT = os.path.abspath(args.output or os.path.join(D, DEFAULT_OUT))
-FONT = "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+FONT = os.environ.get(
+    "PODCAST_FONT_FILE",
+    os.path.join(os.environ.get("PODCAST_FONT_DIR", "/usr/share/fonts/truetype/dejavu"), "DejaVuSans-Bold.ttf"),
+)
 WHOOSH = "/usr/share/sounds/sound-icons/pisk-up.wav"
 DING = "/usr/share/sounds/sound-icons/cembalo-12.wav"
 job_part = re.sub(r"[^A-Za-z0-9_.-]+", "-", os.path.basename(OUT))[:120]

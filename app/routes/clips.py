@@ -4,6 +4,7 @@ import json, os
 from app import app, CLIPS_DIR
 
 ALLOWED_PODCASTS = {'jelasin-dong', 'bocor-alus', 'tukang-kupas', 'tempodotco'}
+NOT_FOUND = object()
 
 def _safe_path(*parts):
     """Ensure path components are safe (no traversal) and join them."""
@@ -18,6 +19,60 @@ def _load_json(path):
         return None
     with open(path) as f:
         return json.load(f)
+
+
+def _load_episode(podcast, episode):
+    """Load one complete, renderable gallery episode or return NOT_FOUND."""
+    ep_path = _safe_path(podcast, episode)
+    if podcast not in ALLOWED_PODCASTS or not ep_path or not os.path.isdir(ep_path):
+        return NOT_FOUND
+    try:
+        captions = _load_json(os.path.join(ep_path, 'captions.json'))
+        clips_meta = _load_json(os.path.join(ep_path, 'clips.json'))
+        episode_data_path = os.path.join(ep_path, 'episode_data.json')
+        episode_data = _load_json(episode_data_path) if os.path.exists(episode_data_path) else {}
+    except (OSError, json.JSONDecodeError):
+        return NOT_FOUND
+    if (not isinstance(captions, dict) or not captions or
+            not isinstance(clips_meta, list) or not clips_meta or
+            not isinstance(episode_data, dict)):
+        return NOT_FOUND
+
+    # clips.html indexes metadata and captions by their 1-based array position.
+    # Require each referenced video to exist so broken episodes never render with
+    # missing players or accidentally appear to be an empty different episode.
+    for index, clip_meta in enumerate(clips_meta, 1):
+        caption = captions.get(str(index))
+        if not isinstance(clip_meta, dict) or not isinstance(caption, dict):
+            return NOT_FOUND
+        filename = caption.get('clip')
+        if not isinstance(filename, str) or not filename or os.path.basename(filename) != filename:
+            return NOT_FOUND
+        if not os.path.isfile(os.path.join(ep_path, filename)):
+            return NOT_FOUND
+    if len(captions) != len(clips_meta):
+        return NOT_FOUND
+
+    raw_title = episode_data.get('episode_title', '')
+    title = raw_title if isinstance(raw_title, str) and raw_title.strip() and raw_title != episode else (
+        episode.rsplit('-', 1)[0] if '-' in episode else episode
+    ).replace('-', ' ').replace('_', ' ').title()
+    x_post = episode_data.get('x_post', {})
+    if not isinstance(x_post, dict):
+        x_post = {}
+    summary = episode_data.get('episode_summary', '')
+    if not isinstance(summary, str):
+        summary = ''
+    return {
+        'podcast': podcast,
+        'episode': episode,
+        'episode_title': title,
+        'date': episode.split('_')[0] if '_' in episode else '',
+        'captions': captions,
+        'clips_meta': clips_meta,
+        'episode_summary': summary,
+        'x_post': x_post,
+    }
 
 def get_episodes():
     """Scan clips dir for podcast/episode structure."""
@@ -38,30 +93,9 @@ def get_episodes():
                 continue
             if '..' in ep or '/' in ep:
                 continue
-            try:
-                caps = _load_json(os.path.join(ep_path, 'captions.json'))
-                clips_meta = _load_json(os.path.join(ep_path, 'clips.json'))
-                episode_data = _load_json(os.path.join(ep_path, 'episode_data.json')) or {}
-            except (OSError, json.JSONDecodeError):
-                continue
-            if caps is None or clips_meta is None:
-                continue
-            raw_ep_title = episode_data.get('episode_title', '')
-            if raw_ep_title and raw_ep_title != ep:
-                ep_title = raw_ep_title
-            else:
-                base = ep.rsplit('-', 1)[0] if '-' in ep else ep
-                ep_title = base.replace('-', ' ').replace('_', ' ').title()
-            episodes.append({
-                'podcast': podcast,
-                'episode': ep,
-                'episode_title': ep_title,
-                'date': ep.split('_')[0] if '_' in ep else '',
-                'captions': caps,
-                'clips_meta': clips_meta,
-                'episode_summary': episode_data.get('episode_summary', ''),
-                'x_post': episode_data.get('x_post', {}),
-            })
+            episode_data = _load_episode(podcast, ep)
+            if episode_data is not NOT_FOUND:
+                episodes.append(episode_data)
     return episodes
 
 @app.route('/')
@@ -73,27 +107,14 @@ def index():
 @app.route('/clips/<podcast>/<episode>')
 def clips_view(podcast=None, episode=None):
     if podcast and episode:
-        if podcast not in ALLOWED_PODCASTS:
-            return 'Podcast not found', 404
-        ep_path = _safe_path(podcast, episode)
-        if not ep_path or not os.path.isdir(ep_path):
+        selected = _load_episode(podcast, episode)
+        if selected is NOT_FOUND:
             return 'Episode not found', 404
-        caps = _load_json(os.path.join(ep_path, 'captions.json'))
-        clips_meta = _load_json(os.path.join(ep_path, 'clips.json'))
-        if caps is None or clips_meta is None:
-            return 'Episode not found', 404
-        episode_data = _load_json(os.path.join(ep_path, 'episode_data.json')) or {}
-        raw_title = episode_data.get('episode_title', '')
-        if raw_title and raw_title != episode:
-            ep_title_display = raw_title
-        else:
-            base = episode.rsplit('-', 1)[0] if '-' in episode else episode
-            ep_title_display = base.replace('-', ' ').replace('_', ' ').title()
-        return render_template('clips.html', captions=caps, clips_meta=clips_meta,
+        return render_template('clips.html', captions=selected['captions'], clips_meta=selected['clips_meta'],
                                podcast=podcast, episode=episode,
-                               episode_title=ep_title_display,
-                               episode_summary=episode_data.get('episode_summary', ''),
-                               x_post=episode_data.get('x_post', {}))
+                               episode_title=selected['episode_title'],
+                               episode_summary=selected['episode_summary'],
+                               x_post=selected['x_post'])
     episodes = get_episodes()
     if episodes:
         ep = episodes[0]
@@ -108,10 +129,15 @@ def clips_view(podcast=None, episode=None):
 @app.route('/static/clips/<podcast>/<episode>/<filename>')
 def serve_clip(podcast, episode, filename):
     # Path traversal protection
+    if podcast not in ALLOWED_PODCASTS:
+        return 'Podcast not found', 404
     for part in (podcast, episode, filename):
         if not part or '..' in part or '/' in part or os.path.isabs(part):
             return 'Invalid path', 400
-    return send_from_directory(os.path.join(CLIPS_DIR, podcast, episode), filename)
+    directory = _safe_path(podcast, episode)
+    if not directory or not os.path.isdir(directory):
+        return 'Clip not found', 404
+    return send_from_directory(directory, filename)
 
 @app.route('/terms')
 def terms():

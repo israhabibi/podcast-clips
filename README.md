@@ -73,7 +73,27 @@ cd ~/podcast-clips
 uv venv
 source .venv/bin/activate
 uv pip install -r requirements.txt
+python scripts/check_setup.py
 ```
+
+The setup check validates the Python packages, `ffmpeg`/`ffprobe`, `yt-dlp`, the YuNet ONNX face model, and the DejaVu subtitle font. Set `FACE_YUNET_MODEL`, `PODCAST_FONT_DIR`, or `PODCAST_FONT_FILE` when these assets are installed elsewhere. The media preflight also runs before an episode download starts:
+
+```bash
+python scripts/check_setup.py --media
+```
+
+### Production web service
+
+The repository includes a Gunicorn WSGI entry point and service template. Install the pinned requirements, confirm `app/.env` and `~/.hermes/.env` are readable by the service user, then install/reload the user service:
+
+```bash
+cp deploy/flask-app.service ~/.config/systemd/user/flask-app.service
+systemctl --user daemon-reload
+systemctl --user enable --now flask-app
+systemctl --user status flask-app --no-pager
+```
+
+Gunicorn listens on `127.0.0.1:5000`; keep the existing HTTPS reverse proxy/tunnel in front of it. Its startup check validates web dependencies before the service starts.
 
 ### Admin page
 

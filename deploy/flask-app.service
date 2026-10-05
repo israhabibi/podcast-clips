@@ -1,0 +1,16 @@
+[Unit]
+Description=Podcast Clips web app (Gunicorn)
+After=network.target
+
+[Service]
+WorkingDirectory=/home/isra/podcast-clips
+EnvironmentFile=/home/isra/podcast-clips/app/.env
+EnvironmentFile=/home/isra/.hermes/.env
+Environment="PATH=/home/isra/podcast-clips/.venv/bin"
+ExecStartPre=/home/isra/podcast-clips/.venv/bin/python /home/isra/podcast-clips/scripts/check_setup.py --web
+ExecStart=/home/isra/podcast-clips/.venv/bin/gunicorn --config /home/isra/podcast-clips/gunicorn.conf.py app.wsgi:app
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target

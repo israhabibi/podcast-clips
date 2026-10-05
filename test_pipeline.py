@@ -202,6 +202,34 @@ class TestFlaskApp(unittest.TestCase):
         r = self.client.get('/clips/unknown-podcast/ep1')
         self.assertEqual(r.status_code, 404)
 
+    def test_explicit_gallery_episode_never_falls_back(self):
+        from app.routes import clips
+        with tempfile.TemporaryDirectory() as temp_dir:
+            podcast_dir = Path(temp_dir) / 'jelasin-dong'
+            episode_dir = podcast_dir / 'episode-valid'
+            episode_dir.mkdir(parents=True)
+            (episode_dir / 'captions.json').write_text(json.dumps({
+                '1': {'clip': 'clip1.mp4', 'title': 'Episode yang benar'}
+            }))
+            (episode_dir / 'clips.json').write_text(json.dumps([{
+                'start': 0, 'end': 30, 'title': 'Klip benar', 'hook': 'Hook benar'
+            }]))
+            (episode_dir / 'episode_data.json').write_text(json.dumps({'episode_title': 'Episode yang benar'}))
+            (episode_dir / 'clip1.mp4').write_bytes(b'video')
+
+            with patch.object(clips, 'CLIPS_DIR', temp_dir):
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 200)
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-missing').status_code, 404)
+                (episode_dir / 'captions.json').write_text('{broken json')
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 404)
+                (episode_dir / 'captions.json').write_text(json.dumps({
+                    '1': {'clip': 'clip1.mp4', 'title': 'Episode yang benar'}
+                }))
+                (episode_dir / 'clip1.mp4').unlink()
+                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 404)
+                # Invalid episodes are omitted from the gallery listing too.
+                self.assertNotIn(b'episode-valid', self.client.get('/').data)
+
     def test_oauth_auth_route(self):
         r = self.client.get('/auth')
         self.assertEqual(r.status_code, 302)

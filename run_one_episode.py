@@ -99,6 +99,14 @@ def main():
         print('Usage: python run_one_episode.py <youtube_url> [podcast_slug] [episode_title]', file=sys.stderr)
         sys.exit(1)
 
+    preflight = subprocess.run(
+        [sys.executable, str(REPO_ROOT / "scripts" / "check_setup.py"), "--media"],
+        cwd=str(REPO_ROOT),
+        check=False,
+    )
+    if preflight.returncode:
+        raise RuntimeError("Media dependency preflight failed; fix the reported setup errors first")
+
     url = sys.argv[1]
     video_id = parse_video_id(url)
     podcast_slug = sys.argv[2] if len(sys.argv) > 2 else 'jelasin-dong'
