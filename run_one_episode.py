@@ -9,6 +9,7 @@ import sys
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from episode_manifest import build_review_manifest, processing_manifest, write_manifest
 
 REPO_ROOT = Path(__file__).resolve().parent
 
@@ -123,6 +124,7 @@ def main():
         episode_dir = ensure_dir(Path('/tmp/podcast-clips') / f"{video_id}-{timestamp}")
     print(f"EPISODE_DIR={episode_dir}")
     print(f"VIDEO_URL={url}")
+    write_manifest(episode_dir, processing_manifest(video_id, podcast_slug, episode_title))
 
     env = os.environ.copy()
     env['PODCAST_WORK_DIR'] = str(episode_dir)
@@ -155,6 +157,7 @@ def main():
 
     if not source.exists():
         raise RuntimeError(f'Video download did not produce {source}')
+    env['PODCAST_SOURCE_VIDEO'] = str(source)
 
     transcript_path = episode_dir / 'transcript.json'
     if not transcript_path.exists():
@@ -178,6 +181,16 @@ def main():
     if not search_results:
         (episode_dir / 'search_results.json').write_text('{}', encoding='utf-8')
     step('caption', [sys.executable, 'caption.py'], env)
+
+    try:
+        clips = json.loads((episode_dir / 'clips.json').read_text(encoding='utf-8'))
+        captions = json.loads((episode_dir / 'captions.json').read_text(encoding='utf-8'))
+        manifest = build_review_manifest(
+            episode_dir, video_id, podcast_slug, episode_title, clips, captions,
+        )
+        write_manifest(episode_dir, manifest)
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        raise RuntimeError(f'Could not create review-ready episode manifest: {exc}') from exc
 
     print(f"SUCCESS: pipeline complete for {episode_title}")
     print(f"WORK_DIR={episode_dir}")

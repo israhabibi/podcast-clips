@@ -1,4 +1,6 @@
-# Log Status Pipeline Podcast-Clips — per 2026-10-01
+# Archived pipeline status snapshot — 2026-10-01
+
+This is a historical operations snapshot, not the current task board. Episode states and YouTube upload counts below were not revalidated during the 2026-10-07 remediation; use `REMEDIATION_KANBAN.md` for current code and infrastructure work.
 
 ## A. Proses batch10 (auto-episode pipeline) — batch10_state.json
 

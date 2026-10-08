@@ -2,6 +2,7 @@
 """Caption + link berita terkait per klip via LLM + web search."""
 import json, sys, os, tempfile, time, urllib.error, urllib.request
 from pathlib import Path
+from urllib.parse import urlparse
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
 if not KEY:
@@ -24,6 +25,10 @@ with open(WORK_DIR / "clips.json") as f:
     clips = json.load(f)
 with open(WORK_DIR / "transcript.json") as f:
     segs = json.load(f)
+if not isinstance(clips, list) or not clips:
+    sys.exit("clips.json must contain at least one clip")
+if not isinstance(segs, list) or not segs:
+    sys.exit("transcript.json must contain at least one segment")
 
 LLM_MODEL = os.environ.get("CAPTION_LLM_MODEL", "MiniMax-M2.7-highspeed")
 LLM_TIMEOUT = int(os.environ.get("LLM_TIMEOUT", "300"))
@@ -53,17 +58,37 @@ def llm(prompt):
 results = {}
 search_file = WORK_DIR / "search_results.json"
 search_data = json.load(open(search_file)) if search_file.exists() else {}
+if not isinstance(search_data, dict):
+    sys.exit("search_results.json must be an object keyed by clip number")
 
 for i, c in enumerate(clips, 1):
+    if not isinstance(c, dict) or not isinstance(c.get("title"), str) or not c["title"].strip():
+        sys.exit(f"Clip {i} is missing a title")
     t0, t1 = float(c["start"]), float(c["end"])
     text = " ".join(s["text"] for s in segs if s["end"] > t0 and s["start"] < t1)
+    if not text.strip():
+        sys.exit(f"Clip {i} has no transcript text")
+    clip_filename = c.get("filename") if isinstance(c.get("filename"), str) and c.get("filename").strip() else f"clip{i:02d}.mp4"
+    clip_filename = str(Path(clip_filename).name)
+    clip_path = WORK_DIR / "clips" / clip_filename
+    if not clip_path.is_file() or clip_path.stat().st_size <= 0:
+        sys.exit(f"Rendered clip {i} is missing or empty: {clip_path}")
     # 1. LLM buat search query dari isi klip
     q = llm(f"Berdasarkan transkrip klip podcast ini, buat SATU search query berbahasa Indonesia untuk mencari berita terkait topiknya. Balas HANYA query-nya, tanpa penjelasan.\n\nTranskrip: {text[:1500]}").strip().strip('"')
+    if not q:
+        raise RuntimeError(f"LLM returned an empty search query for clip {i}")
     print(f"clip{i:02d} query: {q}")
     # 2. cari berita (pakai hasil pre-fetched)
     found = search_data.get(str(i)) or search_data.get(i)
     if not found:
         found = []
+    if not isinstance(found, list):
+        raise ValueError(f"Search results for clip {i} must be a list")
+    for result in found:
+        url = result.get("url") if isinstance(result, dict) else None
+        parsed_url = urlparse(url or "")
+        if parsed_url.scheme not in ("http", "https") or not parsed_url.netloc:
+            raise ValueError(f"Search result for clip {i} has an invalid URL")
     # 3. LLM rangkai caption (tanpa link — link ditambahkan setelah)
     cap = llm(f"""Kamu social media manager. Klip podcast ini akan diposting ke TikTok.
 Buat caption TikTok: 1-2 kalimat hook + 1-3 hashtag relevan bahasa Indonesia.
@@ -78,9 +103,9 @@ Balas HANYA caption-nya.""")
         cap = cap.strip()
         for f in found:
             cap += f"\n{f['url']}"
-    clip_filename = c.get("filename") if isinstance(c.get("filename"), str) and c.get("filename").strip() else f"clip{i:02d}.mp4"
-    clip_filename = str(Path(clip_filename).name)  # ensure plain basename
-    results[str(i)] = {"clip": clip_filename, "title": c["title"], "caption": cap, "query": q}
+    if not cap.strip():
+        raise RuntimeError(f"LLM returned an empty caption for clip {i}")
+    results[str(i)] = {"clip": clip_filename, "title": c["title"].strip(), "caption": cap.strip(), "query": q}
     print(f"  caption: {cap[:100]}")
 
 descriptor, temporary = tempfile.mkstemp(prefix=".captions-", suffix=".json", dir=WORK_DIR)

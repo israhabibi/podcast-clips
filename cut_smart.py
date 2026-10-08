@@ -6,9 +6,10 @@ from pathlib import Path
 FFMPEG = shutil.which("ffmpeg") or "/usr/bin/ffmpeg"
 FFPROBE = shutil.which("ffprobe") or "/usr/bin/ffprobe"
 import cv2
-import numpy as np
-from scipy.interpolate import CubicSpline
 from news_overlay import build_news_overlay_event
+from subtitle_timing import subtitle_chunks
+from clip_quality import validate_clip_ranges
+from face_tracking import smooth_track, validate_video_dimensions
 
 if len(sys.argv) < 2:
     sys.exit("Usage: python cut_smart.py <source-video>")
@@ -106,22 +107,17 @@ try:
 except (ValueError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
     sys.exit(f"Cannot read source video metadata: {exc}")
 
-validated_clips = []
-for index, c in enumerate(clips, 1):
-    try:
-        start = _finite_number(c.get("start"), f"Clip {index} start")
-        end = _finite_number(c.get("end"), f"Clip {index} end")
-    except ValueError as exc:
-        sys.exit(str(exc))
-    if start < 0 or end <= start:
-        sys.exit(f"Clip {index}: invalid range {start}-{end}")
-    if SOURCE_DURATION is not None and end > SOURCE_DURATION + 0.5:
-        sys.exit(f"Clip {index}: end {end:.1f}s exceeds source duration {SOURCE_DURATION:.1f}s")
-    title = str(c.get("title", f"Clip {index}")).strip() or f"Clip {index}"
-    if end - start > 75:
-        end = start + 75
-    validated_clips.append({**c, "start": start, "end": end, "title": title})
-clips = validated_clips
+try:
+    validate_video_dimensions(SOURCE_WIDTH, SOURCE_HEIGHT)
+except ValueError as exc:
+    sys.exit(f"Invalid source video dimensions: {exc}")
+
+if SOURCE_DURATION is None:
+    sys.exit("Cannot determine source video duration with ffprobe")
+try:
+    clips = validate_clip_ranges(clips, segs, SOURCE_DURATION)
+except ValueError as exc:
+    sys.exit(f"Invalid clip input: {exc}")
 
 def face_positions(video, start, dur, samples=48):
     """Sample frame via ffmpeg (AV1-safe), return list of (t, face_cx)."""
@@ -163,43 +159,6 @@ def face_positions(video, start, dur, samples=48):
                 pts.append((dur * i / n, f[0] * scale + f[2] * scale / 2))
         return pts, w, h
 
-def smooth_track(pts, dur, crop_w, w):
-    """Interpolasi posisi crop-x yang SMOOTH: cubic spline + kecepatan max terbatas."""
-    margin = 60
-    min_cx = crop_w / 2 + margin
-    max_cx = w - crop_w / 2 - margin
-    if not pts:
-        center_cx = w / 2
-        clamped_cx = min(max(center_cx, min_cx), max_cx)
-        return [(0, clamped_cx)]
-    ts = [p[0] for p in pts]
-    cxs = [min(max(p[1], min_cx), max_cx) for p in pts]
-    med = []
-    for i in range(len(cxs)):
-        win = cxs[max(0, i-2):i+3]
-        med.append(sorted(win)[len(win)//2])
-    steps = 90
-    grid = np.linspace(0, dur, steps)
-    from scipy.interpolate import CubicSpline as _CubicSpline
-    if len(ts) >= 4:
-        cs = _CubicSpline(ts, med)
-        xs = cs(grid)
-    else:
-        xs = np.interp(grid, ts, med)
-    max_v = 180.0
-    for i in range(1, len(xs)):
-        dt = grid[i] - grid[i-1]
-        dv = xs[i] - xs[i-1]
-        lim = max_v * dt
-        if abs(dv) > lim:
-            xs[i] = xs[i-1] + np.sign(dv) * lim
-    k = max(steps//15, 5)
-    smoothed = np.convolve(np.pad(xs, k//2, mode="edge"), np.ones(k)/k, mode="valid")
-    if len(smoothed) < len(xs):
-        smoothed = np.interp(grid, np.linspace(0, 1, len(smoothed)), smoothed)
-    clamped = np.clip(smoothed, min_cx, max_cx)
-    return list(zip(grid, clamped))
-
 ok = 0
 for i, c in enumerate(clips, 1):
     start, end = c["start"], c["end"]
@@ -214,27 +173,7 @@ for i, c in enumerate(clips, 1):
     crop_w = int(h * 9 / 16)
     track = smooth_track(pts, dur, crop_w, w)
     print(f"clip{i:02d}: {len(pts)} face samples, track {track[0][1]:.0f}->{track[-1][1]:.0f}px")
-    subs = []
-    for s in segs:
-        if not isinstance(s, dict):
-            continue
-        s_start = s.get("start")
-        s_end = s.get("end")
-        s_text = s.get("text")
-        if not (isinstance(s_start, (int, float)) and isinstance(s_end, (int, float)) and isinstance(s_text, str)):
-            continue
-        if s_end <= start or s_start >= end:
-            continue
-        st = max(s_start, start) - start
-        en = min(s_end, end) - start
-        words = s_text.split()
-        n_words = max(len(words), 1)
-        for j in range(0, n_words, 4):
-            chunk = " ".join(words[j:min(j+4, n_words)])
-            if chunk.strip():
-                chunk_start = st + (en - st) * j / n_words
-                chunk_end = st + (en - st) * min(j + 4, n_words) / n_words
-                subs.append((chunk_start, chunk_end, chunk))
+    subs = subtitle_chunks(segs, start, end)
     ass = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080", "PlayResY: 1920", "",
            "[V4+ Styles]",
            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",

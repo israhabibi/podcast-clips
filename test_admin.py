@@ -65,6 +65,57 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(self.login().status_code, 302)
         self.assertEqual(self.client.get("/admin").status_code, 200)
 
+    def test_session_survives_app_restart_when_secret_is_stable(self):
+        import subprocess
+        import sys
+        import textwrap
+
+        # Independent interpreters import the deployed WSGI app and use its
+        # actual login/start/callback routes. All provider requests are mocked.
+        script = textwrap.dedent("""
+            import json, sys
+            from unittest.mock import Mock, patch
+            from app.wsgi import app
+            import app.routes.youtube as youtube
+            app.config.update(TESTING=True)
+            client = app.test_client()
+            flow = Mock(code_verifier='test-verifier')
+            flow.authorization_url.return_value = ('https://example.invalid/auth', 'restart-state')
+            flow.credentials.token = 'test-token'
+            flow.credentials.to_json.return_value = json.dumps({'token': 'test-token'})
+            identity = Mock()
+            identity.json.return_value = {'items': [{'id': 'test-channel'}]}
+            with patch.object(youtube.google_auth_oauthlib.flow.Flow, 'from_client_config', return_value=flow), patch.object(youtube._req, 'get', return_value=identity):
+                if sys.argv[1] == 'start':
+                    client.get('/admin/login')
+                    with client.session_transaction() as session:
+                        csrf = session['admin_csrf']
+                    assert client.post('/admin/login', data={'csrf_token': csrf, 'password': 'correct horse battery staple'}).status_code == 302
+                    assert client.get('/auth').status_code == 302
+                    print(json.dumps({'cookie': client.get_cookie(app.config['SESSION_COOKIE_NAME']).value}))
+                else:
+                    cookie = json.loads(sys.stdin.read())['cookie']
+                    client.set_cookie(app.config['SESSION_COOKIE_NAME'], cookie)
+                    response = client.get('/oauth?state=restart-state&code=test-code')
+                    print(json.dumps({'status': response.status_code, 'exchanges': flow.fetch_token.call_count}))
+        """)
+        env = os.environ.copy()
+        env.update({
+            "APP_ENV": "production", "FLASK_SECRET_KEY": "test-restart-secret",
+            "SESSION_COOKIE_SECURE": "false", "YOUTUBE_CLIENT_ID": "test-client",
+            "YOUTUBE_CLIENT_SECRET": "test-client-secret", "YOUTUBE_EXPECTED_CHANNEL_ID": "test-channel",
+            "YOUTUBE_TOKEN_FILE": str(Path(self.tempdir.name) / "restart-token.json"),
+        })
+        repo = Path(__file__).resolve().parent
+        before = subprocess.run([sys.executable, "-c", script, "start"], env=env, cwd=repo, capture_output=True, text=True, check=True)
+        cookie_data = before.stdout.strip()
+        after = subprocess.run([sys.executable, "-c", script, "callback"], input=cookie_data, env=env, cwd=repo, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(after.stdout), {"status": 302, "exchanges": 1})
+        self.assertEqual(json.loads(Path(env["YOUTUBE_TOKEN_FILE"]).read_text()), {"token": "test-token"})
+        env["FLASK_SECRET_KEY"] = "different-test-secret"
+        changed = subprocess.run([sys.executable, "-c", script, "callback"], input=cookie_data, env=env, cwd=repo, capture_output=True, text=True, check=True)
+        self.assertEqual(json.loads(changed.stdout), {"status": 403, "exchanges": 0})
+
     def test_add_link_validates_and_deduplicates(self):
         from app.admin_store import list_submissions, set_submission_status
         self.login()
@@ -336,29 +387,82 @@ class AdminPageTests(unittest.TestCase):
         caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Test caption"}
         result = {"video_id": "youtube123", "url": "https://youtube.com/watch?v=youtube123"}
         with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "deployed_clip_metadata", return_value={"sha256": "a" * 64, "file_size": 5}), \
              patch.object(admin_routes, "get_youtube_upload", return_value=None), \
              patch.object(admin_routes, "record_youtube_upload") as record, \
              patch("scripts.youtube_upload.upload_clip", return_value=result) as upload:
-            response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={"csrf_token": self.csrf()})
+            response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={
+                "csrf_token": self.csrf(), "release_approved": "1",
+            })
         self.assertEqual(response.status_code, 302)
         self.assertEqual(upload.call_args.args[1:3], ("Test Clip", "Test caption"))
+        self.assertTrue(upload.call_args.kwargs["release_approved"])
         self.assertEqual(record.call_args_list[-1].args[:4], ("bocor-alus", "episode-one", "1", "uploaded"))
 
-    def test_clip_upload_marks_quota_without_retry(self):
+    def test_clip_metadata_failure_retains_id_for_retry(self):
         import app.routes.admin as admin_routes
+        from app.admin_store import get_youtube_upload, get_youtube_retry
+        self.login()
+        clip_path = Path(self.tempdir.name) / "clip01.mp4"
+        clip_path.write_bytes(b"video")
+        caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Caption"}
+        def pending_upload(*args, **kwargs):
+            kwargs["on_insert"]("existing123")
+            self.assertEqual(get_youtube_upload("bocor-alus", "episode-one", "1")["video_id"], "existing123")
+            return {"video_id": "existing123", "url": "https://youtu.be/existing123", "warning": "tags missing", "metadata_update_failed": True}
+        with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "deployed_clip_metadata", return_value={"sha256": "a" * 64, "file_size": 5}):
+            with patch("scripts.youtube_upload.upload_clip", side_effect=pending_upload):
+                self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={"csrf_token": self.csrf(), "release_approved": "1"})
+            self.assertEqual(get_youtube_upload("bocor-alus", "episode-one", "1")["status"], "metadata_pending")
+            self.assertEqual(get_youtube_retry("bocor-alus", "episode-one", "1")["status"], "queued")
+            with patch("scripts.youtube_upload.upload_clip", return_value={"video_id": "existing123", "url": "https://youtu.be/existing123"}) as repair:
+                self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={"csrf_token": self.csrf()})
+            self.assertEqual(repair.call_args.kwargs["existing_video_id"], "existing123")
+            self.assertEqual(get_youtube_upload("bocor-alus", "episode-one", "1")["status"], "uploaded")
+
+    def test_compilation_metadata_failure_returns_pending_and_repairs_same_id(self):
+        import app.routes.admin as admin_routes
+        from app.admin_store import get_youtube_upload
+        self.login()
+        deployed = Path(self.tempdir.name) / "bocor-alus/episode-one/top5_compilation.mp4"
+        deployed.parent.mkdir(parents=True)
+        deployed.write_bytes(b"video")
+        with patch.object(admin_routes, "_compilation_workdir", return_value=deployed.parent), \
+             patch.object(admin_routes, "_compilation_deployed_path", return_value=deployed), \
+             patch.object(admin_routes, "_episode_meta_from_workdir", return_value={"podcast": "bocor-alus", "title": "Episode"}), \
+             patch.object(admin_routes, "deployed_clip_metadata", return_value={"sha256": "a" * 64, "file_size": 5}):
+            with patch("scripts.youtube_upload.upload_clip", return_value={"video_id": "existing123", "url": "https://youtu.be/existing123", "error": "metadata rejected", "partial_success": True}):
+                response = self.client.post("/admin/compilation/upload/episode-one", json={"csrf_token": self.csrf(), "release_confirmed": True})
+            self.assertEqual(response.status_code, 502)
+            self.assertEqual(response.get_json()["status"], "metadata_pending")
+            self.assertFalse(response.get_json()["ok"])
+            self.assertEqual(get_youtube_upload("bocor-alus", "episode-one", "99")["video_id"], "existing123")
+            with patch("scripts.youtube_upload.upload_clip", return_value={"video_id": "existing123", "url": "https://youtu.be/existing123"}) as repair:
+                response = self.client.post("/admin/compilation/upload/episode-one", json={"csrf_token": self.csrf()})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(repair.call_args.kwargs["existing_video_id"], "existing123")
+
+    def test_clip_upload_marks_quota_and_schedules_retry(self):
+        import app.routes.admin as admin_routes
+        from app.admin_store import get_youtube_retry
 
         self.login()
         clip_path = Path(self.tempdir.name) / "clip01.mp4"
         clip_path.write_bytes(b"video")
         caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Test caption"}
         with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "deployed_clip_metadata", return_value={"sha256": "b" * 64, "file_size": 5}), \
              patch.object(admin_routes, "get_youtube_upload", return_value=None), \
              patch.object(admin_routes, "record_youtube_upload") as record, \
              patch("scripts.youtube_upload.upload_clip", side_effect=RuntimeError("uploadLimitExceeded")) as upload:
-            response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={"csrf_token": self.csrf()})
+            response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={
+                "csrf_token": self.csrf(), "release_approved": "1",
+            })
         self.assertEqual(response.status_code, 302)
         upload.assert_called_once()
         self.assertEqual(record.call_args_list[-1].args[:4], ("bocor-alus", "episode-one", "1", "quota"))
+        self.assertEqual(get_youtube_retry("bocor-alus", "episode-one", "1")["status"], "queued")
 
     def test_clip_upload_requires_csrf_and_admin(self):
         response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload")
@@ -366,6 +470,48 @@ class AdminPageTests(unittest.TestCase):
         self.login()
         response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload")
         self.assertEqual(response.status_code, 400)
+
+    def test_clip_upload_is_blocked_without_explicit_release_review(self):
+        import app.routes.admin as admin_routes
+        self.login()
+        clip_path = Path(self.tempdir.name) / "clip01.mp4"
+        clip_path.write_bytes(b"video")
+        caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Test caption"}
+        with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "deployed_clip_metadata", return_value={"sha256": "c" * 64, "file_size": 5}), \
+             patch("scripts.youtube_upload.upload_clip") as upload:
+            response = self.client.post("/admin/clips/bocor-alus/episode-one/1/upload", data={
+                "csrf_token": self.csrf(),
+            })
+        self.assertEqual(response.status_code, 302)
+        upload.assert_not_called()
+
+    def test_manual_studio_metadata_requires_prior_digest_bound_approval(self):
+        import app.routes.admin as admin_routes
+        self.login()
+        clip_path = Path(self.tempdir.name) / "clip01.mp4"
+        clip_path.write_bytes(b"manual review media")
+        caption = {"clip": "clip01.mp4", "title": "Test Clip", "caption": "Caption"}
+        digest = "d" * 64
+        with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "deployed_clip_metadata", return_value={"sha256": digest}), \
+             patch.object(admin_routes, "record_manual_upload") as record:
+            response = self.client.post(
+                "/admin/clips/bocor-alus/episode-one/1/manual-upload",
+                data={"csrf_token": self.csrf(), "video_id": "abcdefghijk"},
+            )
+        self.assertEqual(response.status_code, 302)
+        record.assert_not_called()
+
+        with patch.object(admin_routes, "_deployed_clip", return_value=(clip_path, caption)), \
+             patch.object(admin_routes, "deployed_clip_metadata", return_value={"sha256": digest}), \
+             patch.object(admin_routes, "approve_youtube_release") as approve:
+            response = self.client.post(
+                "/admin/clips/bocor-alus/episode-one/1/approve-manual",
+                data={"csrf_token": self.csrf(), "release_approved": "1"},
+            )
+        self.assertEqual(response.status_code, 302)
+        approve.assert_called_once_with("bocor-alus", "episode-one", "1", digest, reviewed_by="admin")
 
     def test_clip_upload_does_not_duplicate_an_upload_in_progress(self):
         import app.routes.admin as admin_routes
@@ -401,6 +547,34 @@ class AdminPageTests(unittest.TestCase):
         self.assertTrue(retry_claimed)
         self.assertEqual(previous["status"], "failed")
 
+    def test_metadata_claim_retains_id_and_rejects_replaced_media(self):
+        from app.admin_store import claim_youtube_upload, get_youtube_upload, record_youtube_upload
+        key = ("bocor-alus", "episode-one", "1")
+        record_youtube_upload(*key, "metadata_pending", video_id="existing123", sha256="a" * 64)
+        self.assertFalse(claim_youtube_upload(*key, sha256="b" * 64)[0])
+        self.assertEqual(get_youtube_upload(*key)["status"], "metadata_pending")
+        claimed, previous = claim_youtube_upload(*key, sha256="a" * 64)
+        self.assertTrue(claimed)
+        self.assertEqual(previous["video_id"], "existing123")
+        self.assertEqual(get_youtube_upload(*key)["video_id"], "existing123")
+
+    def test_quota_retry_queue_claims_due_items_once_and_reschedules(self):
+        from datetime import datetime, timedelta, timezone
+        from app.admin_store import (
+            enqueue_youtube_retry, claim_due_youtube_retry,
+            finish_youtube_retry, get_youtube_retry,
+        )
+        due = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+        later = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+        enqueue_youtube_retry("bocor-alus", "episode-one", "99", retry_at=due, error="quota")
+        first = claim_due_youtube_retry()
+        self.assertEqual(first["status"], "processing")
+        self.assertIsNone(claim_due_youtube_retry())
+        finish_youtube_retry("bocor-alus", "episode-one", "99", "queued", retry_at=later,
+                             error="quota still active")
+        self.assertEqual(get_youtube_retry("bocor-alus", "episode-one", "99")["retry_at"], later)
+        self.assertIsNone(claim_due_youtube_retry())
+
     def test_failed_upload_remains_visible_for_retry(self):
         import app.routes.admin as admin_routes
 
@@ -433,6 +607,34 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(list_submissions()[0]["status"], "in_progress")
         worker.assert_called_once()
 
+    def test_failed_submission_can_be_retried_without_deleting_row(self):
+        from app.admin_store import add_submission, list_submissions, set_submission_status
+        video_id = add_submission("https://youtu.be/abcdefghijk", "jelasin-dong", "Test episode")
+        set_submission_status(video_id, "failed", error_message="temporary worker failure")
+        self.login()
+        log_dir = Path(self.tempdir.name) / "retry-logs"
+        with patch.dict(os.environ, {"ADMIN_JOB_LOG_DIR": str(log_dir)}):
+            with patch("app.routes.admin.subprocess.Popen") as worker:
+                response = self.client.post(
+                    f"/admin/youtube-links/{video_id}/retry",
+                    data={"csrf_token": self.csrf()},
+                )
+        self.assertEqual(response.status_code, 302)
+        rows = list_submissions()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["status"], "in_progress")
+        self.assertEqual(rows[0]["error_message"], "")
+        worker.assert_called_once()
+
+    def test_submission_retry_rejects_missing_csrf_and_duplicate_claim(self):
+        from app.admin_store import add_submission, claim_submission_retry
+        video_id = add_submission("https://youtu.be/abcdefghijk", "jelasin-dong", "Test episode")
+        self.login()
+        response = self.client.post(f"/admin/youtube-links/{video_id}/retry")
+        self.assertEqual(response.status_code, 400)
+        self.assertTrue(claim_submission_retry(video_id))
+        self.assertFalse(claim_submission_retry(video_id))
+
     def test_episode_worker_marks_submission_ready_for_review(self):
         from app.admin_store import add_submission, list_submissions
         from scripts.process_episode import main as process_episode
@@ -447,10 +649,13 @@ class AdminPageTests(unittest.TestCase):
         from app.admin_store import add_submission, list_submissions
         from scripts.process_episode import main as process_episode
         video_id = add_submission("https://youtu.be/abcdefghijk", "jelasin-dong", "Test episode")
-        with patch("scripts.process_episode.subprocess.run", return_value=Mock(returncode=1)):
+        with patch("scripts.process_episode.subprocess.run", return_value=Mock(
+            returncode=1, stdout="", stderr="curate failed: clip boundary invalid",
+        )):
             with patch("sys.argv", ["process_episode.py", video_id]):
                 self.assertEqual(process_episode(), 1)
         self.assertEqual(list_submissions()[0]["status"], "failed")
+        self.assertIn("curate failed: clip boundary invalid", list_submissions()[0]["error_message"])
 
     def test_submission_error_details_are_returned_and_rendered(self):
         from app.admin_store import add_submission, list_submissions, set_submission_status
@@ -468,6 +673,85 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"ffmpeg failed on clip 3", response.data)
 
+    def test_failed_submission_retry_is_visible_with_details_collapsed(self):
+        from app.admin_store import add_submission, set_submission_status
+        import app.routes.admin as admin_routes
+        video_id = add_submission("https://youtu.be/abcdefghijk", "tukang-kupas", "Failed episode")
+        set_submission_status(video_id, "failed", "Original worker error")
+        self.login()
+        with patch.object(admin_routes, "_deployed_clips", return_value=[]), \
+             patch.object(admin_routes, "_try_check_youtube_token_valid", return_value=(False, "no_token")):
+            response = self.client.get("/admin")
+        self.assertEqual(response.status_code, 200)
+        card = response.get_data(as_text=True).split('<article class="sub-group"', 1)[1].split('</article>', 1)[0]
+        header = card.split('</header>', 1)[0]
+        self.assertIn(f'/admin/youtube-links/{video_id}/retry', header)
+        self.assertIn('Coba proses lagi', header)
+        self.assertIn('Progress tidak tersedia', header)
+        self.assertNotIn('100%', header)
+        self.assertIn('Original worker error', card)
+        self.assertRegex(card, r'class="sub-group-items"[\s\S]*?aria-hidden="true"\s+hidden')
+
+    def test_failed_submission_progress_is_unknown_in_page_and_polling(self):
+        from app.admin_store import add_submission, set_submission_status
+        import app.routes.admin as admin_routes
+        progress = admin_routes._job_progress({"status": "failed", "video_id": "abcdefghijk"})
+        self.assertFalse(progress["percent_known"])
+        self.assertEqual(progress["percent"], 0)
+        video_id = add_submission("https://youtu.be/abcdefghijk", "tukang-kupas", "Failed episode")
+        set_submission_status(video_id, "failed", "Original worker error")
+        self.login()
+        response = self.client.get("/admin/jobs")
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        self.assertFalse(payload["jobs"][0]["percent_known"])
+        self.assertFalse(payload["groups"][0]["percent_known"])
+        self.assertEqual(payload["groups"][0]["percent"], 0)
+
+    def test_group_detail_toggle_removes_and_restores_hidden_attribute(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("Node is required to exercise the actual JavaScript click handler")
+        template = (Path(__file__).resolve().parent / "app/templates/admin.html").read_text()
+        handler = '// --- Source video toggle' + template.split('// --- Source video toggle', 1)[1].split('// --- Job progress auto refresh', 1)[0]
+        harness = r'''
+            const vm = require('node:vm');
+            const assert = require('node:assert/strict');
+            const source = require('node:fs').readFileSync(0, 'utf8');
+            const group = {attributes: {}, setAttribute(k, v) { this.attributes[k] = v; }};
+            const target = {
+                hidden: true, attributes: {},
+                setAttribute(k, v) { this.attributes[k] = v; },
+                toggleAttribute(k, present) { assert.equal(k, 'hidden'); this.hidden = present; }
+            };
+            const button = {
+                attributes: {'aria-expanded': 'false', 'aria-controls': 'items'}, textContent: '',
+                getAttribute(k) { return this.attributes[k]; },
+                setAttribute(k, v) { this.attributes[k] = v; },
+                closest(selector) { return selector === '.sub-group' ? group : null; }
+            };
+            const listeners = [];
+            vm.runInNewContext(source, {document: {
+                addEventListener(type, fn) { if (type === 'click') listeners.push(fn); },
+                getElementById(id) { return id === 'items' ? target : null; }
+            }});
+            const event = {target: {closest(selector) { return selector === '[data-group-toggle-items]' ? button : null; }}};
+            for (const listener of listeners) listener(event);
+            assert.equal(target.hidden, false);
+            assert.equal(target.attributes['aria-hidden'], 'false');
+            assert.equal(group.attributes['aria-expanded'], 'true');
+            assert.equal(button.textContent, '▲ Sembunyikan');
+            for (const listener of listeners) listener(event);
+            assert.equal(target.hidden, true);
+            assert.equal(target.attributes['aria-hidden'], 'true');
+            assert.equal(group.attributes['aria-expanded'], 'false');
+            assert.equal(button.textContent, '⋮ Detail');
+        '''
+        result = subprocess.run([node, '-e', harness], input=handler, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_submission_requires_csrf_and_login(self):
         data = {"url": "https://youtu.be/abcdefghijk", "podcast": "jelasin-dong"}
         self.assertEqual(self.client.post("/admin/youtube-links", data=data).status_code, 302)
@@ -480,6 +764,22 @@ class AdminPageTests(unittest.TestCase):
             response = self.client.get("/tiktok-oauth?code=example")
         self.assertEqual(response.status_code, 400)
         token_request.assert_not_called()
+
+    def test_oauth_callbacks_reject_mismatched_state_before_exchange(self):
+        self.login()
+        with self.client.session_transaction() as session:
+            session["tiktok_state"] = "expected-tiktok"
+            session["tiktok_verifier"] = "verifier"
+            session["oauth_state"] = "expected-youtube"
+            session["code_verifier"] = "verifier"
+        with patch("app.routes.tiktok._req.post") as tiktok_request, \
+             patch("app.routes.youtube.google_auth_oauthlib.flow.Flow.from_client_config") as youtube_flow:
+            tiktok = self.client.get("/tiktok-oauth?code=code&state=wrong")
+            youtube = self.client.get("/oauth?code=code&state=wrong")
+        self.assertEqual(tiktok.status_code, 400)
+        self.assertEqual(youtube.status_code, 400)
+        tiktok_request.assert_not_called()
+        youtube_flow.assert_not_called()
 
     def test_youtube_callback_rejects_missing_state_without_token_request(self):
         self.login()
@@ -497,6 +797,7 @@ class AdminPageTests(unittest.TestCase):
         token_response = Mock(status_code=200)
         token_response.json.return_value = {"access_token": "test-token", "open_id": "test-account"}
         with patch("app.routes.tiktok.TIKTOK_TOKEN_FILE", str(token_path)), \
+             patch("app.routes.tiktok.TIKTOK_EXPECTED_OPEN_ID", "test-account"), \
              patch("app.routes.tiktok._req.post", return_value=token_response) as token_request:
             first = self.client.get("/tiktok-oauth?code=test-code&state=expected-state")
             second = self.client.get("/tiktok-oauth?code=test-code&state=expected-state")
@@ -513,7 +814,11 @@ class AdminPageTests(unittest.TestCase):
         token_path = Path(self.tempdir.name) / "youtube_token.json"
         flow = Mock()
         flow.credentials.to_json.return_value = '{"token":"test-token"}'
+        identity_response = Mock(status_code=200)
+        identity_response.json.return_value = {"items": [{"id": "expected-channel"}]}
         with patch("app.routes.youtube.YOUTUBE_TOKEN_FILE", str(token_path)), \
+             patch("app.routes.youtube.YOUTUBE_EXPECTED_CHANNEL_ID", "expected-channel"), \
+             patch("app.routes.youtube._req.get", return_value=identity_response), \
              patch("app.routes.youtube.google_auth_oauthlib.flow.Flow.from_client_config", return_value=flow):
             first = self.client.get("/oauth?code=test-code&state=expected-state")
             second = self.client.get("/oauth?code=test-code&state=expected-state")
@@ -521,6 +826,50 @@ class AdminPageTests(unittest.TestCase):
         self.assertEqual(second.status_code, 400)
         self.assertEqual(json.loads(token_path.read_text())["token"], "test-token")
         flow.fetch_token.assert_called_once()
+
+    def test_unexpected_oauth_accounts_leave_previous_tokens_unchanged(self):
+        self.login()
+        tik_tok_path = Path(self.tempdir.name) / "tiktok-token.json"
+        yt_tok_path = Path(self.tempdir.name) / "youtube-token.json"
+        tik_tok_path.write_text('{"access_token":"old-tiktok"}')
+        yt_tok_path.write_text('{"token":"old-youtube"}')
+        with self.client.session_transaction() as session:
+            session["tiktok_state"] = "tiktok-state"
+            session["tiktok_verifier"] = "tiktok-verifier"
+        token_response = Mock(status_code=200)
+        token_response.json.return_value = {"access_token": "new-tiktok", "open_id": "wrong-account"}
+        with patch("app.routes.tiktok.TIKTOK_TOKEN_FILE", str(tik_tok_path)), \
+             patch("app.routes.tiktok.TIKTOK_EXPECTED_OPEN_ID", "expected-account"), \
+             patch("app.routes.tiktok._req.post", return_value=token_response):
+            response = self.client.get("/tiktok-oauth?code=code&state=tiktok-state")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(json.loads(tik_tok_path.read_text())["access_token"], "old-tiktok")
+
+        with self.client.session_transaction() as session:
+            session["oauth_state"] = "youtube-state"
+            session["code_verifier"] = "youtube-verifier"
+        flow = Mock()
+        flow.credentials.token = "new-youtube-access"
+        flow.credentials.to_json.return_value = '{"token":"new-youtube"}'
+        identity_response = Mock(status_code=200)
+        identity_response.json.return_value = {"items": [{"id": "wrong-channel"}]}
+        with patch("app.routes.youtube.YOUTUBE_TOKEN_FILE", str(yt_tok_path)), \
+             patch("app.routes.youtube.YOUTUBE_EXPECTED_CHANNEL_ID", "expected-channel"), \
+             patch("app.routes.youtube._req.get", return_value=identity_response), \
+             patch("app.routes.youtube.google_auth_oauthlib.flow.Flow.from_client_config", return_value=flow):
+            response = self.client.get("/oauth?code=code&state=youtube-state")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(json.loads(yt_tok_path.read_text())["token"], "old-youtube")
+
+    def test_failed_token_replace_preserves_previous_file(self):
+        from app.admin_security import write_private_json
+        token_path = Path(self.tempdir.name) / "token.json"
+        token_path.write_text('{"token":"old"}')
+        with patch("app.admin_security.os.replace", side_effect=OSError("disk failure")):
+            with self.assertRaises(OSError):
+                write_private_json(token_path, {"token": "new"})
+        self.assertEqual(json.loads(token_path.read_text()), {"token": "old"})
+        self.assertEqual(list(Path(self.tempdir.name).glob(".token-*")), [])
 
     def test_five_failed_logins_are_throttled(self):
         self.client.get("/admin/login")

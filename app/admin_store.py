@@ -3,6 +3,7 @@
 import hashlib
 import os
 import re
+import secrets
 import sqlite3
 import time
 from datetime import datetime, timezone
@@ -122,6 +123,30 @@ def _connect():
             updated_at TEXT NOT NULL
         )"""
     )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS youtube_release_approvals (
+            podcast TEXT NOT NULL,
+            episode TEXT NOT NULL,
+            clip_num TEXT NOT NULL,
+            sha256 TEXT NOT NULL,
+            reviewed_at TEXT NOT NULL,
+            reviewed_by TEXT NOT NULL,
+            PRIMARY KEY (podcast, episode, clip_num)
+        )"""
+    )
+    connection.execute(
+        """CREATE TABLE IF NOT EXISTS youtube_retry_queue (
+            podcast TEXT NOT NULL,
+            episode TEXT NOT NULL,
+            clip_num TEXT NOT NULL,
+            retry_at TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'queued',
+            attempts INTEGER NOT NULL DEFAULT 0,
+            error TEXT NOT NULL DEFAULT '',
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (podcast, episode, clip_num)
+        )"""
+    )
     _ensure_columns(connection)
     return connection
 
@@ -180,7 +205,7 @@ def recent_submissions(limit=50):
     return list_submissions(limit=limit)
 
 
-UPLOAD_STATUSES = frozenset(("uploading", "uploaded", "quota", "failed", "manual"))
+UPLOAD_STATUSES = frozenset(("uploading", "uploaded", "metadata_pending", "quota", "failed", "manual"))
 
 
 def record_youtube_upload(podcast, episode, clip_num, status, video_id=None, error="", reviewed_by="", sha256="", file_size=0):
@@ -241,13 +266,17 @@ def claim_youtube_upload(podcast, episode, clip_num, sha256="", file_size=0):
         if existing and existing["status"] in ("uploading", "uploaded", "manual"):
             connection.rollback()
             return False, existing
+        if existing and existing["video_id"] and (not sha256 or existing["sha256"] != sha256):
+            # An existing remote video belongs to the media originally approved.
+            connection.rollback()
+            return False, existing
         connection.execute(
             """INSERT INTO youtube_uploads
                (podcast, episode, clip_num, video_id, status, error, created_at,
                 reviewed_at, reviewed_by, sha256, file_size)
                VALUES (?, ?, ?, NULL, 'uploading', '', ?, '', '', ?, ?)
                ON CONFLICT(podcast, episode, clip_num) DO UPDATE SET
-               video_id=NULL, status='uploading', error='', created_at=excluded.created_at,
+               status='uploading', error='', created_at=excluded.created_at,
                reviewed_at='', reviewed_by='', sha256=excluded.sha256,
                file_size=excluded.file_size""",
             (*identity, now, (sha256 or "")[:64], int(file_size or 0)),
@@ -358,6 +387,140 @@ def get_youtube_upload(podcast, episode, clip_num):
     return dict(row) if row else None
 
 
+def approve_youtube_release(podcast, episode, clip_num, sha256, reviewed_by="admin"):
+    """Persist an explicit review decision bound to the exact media digest."""
+    if (podcast not in PODCASTS or not episode or not str(clip_num).isdigit()
+            or not isinstance(sha256, str) or not re.fullmatch(r"[0-9a-f]{64}", sha256)):
+        raise ValueError("Invalid release approval identity or media digest.")
+    connection = _connect()
+    try:
+        with connection:
+            connection.execute(
+                """INSERT INTO youtube_release_approvals
+                   (podcast, episode, clip_num, sha256, reviewed_at, reviewed_by)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(podcast, episode, clip_num) DO UPDATE SET
+                   sha256=excluded.sha256, reviewed_at=excluded.reviewed_at,
+                   reviewed_by=excluded.reviewed_by""",
+                (podcast, episode, str(clip_num), sha256,
+                 datetime.now(timezone.utc).isoformat(), str(reviewed_by or "admin")[:80]),
+            )
+    finally:
+        connection.close()
+
+
+def youtube_release_approved(podcast, episode, clip_num, sha256):
+    if podcast not in PODCASTS or not episode or not str(clip_num).isdigit():
+        return False
+    connection = _connect()
+    try:
+        row = connection.execute(
+            "SELECT sha256 FROM youtube_release_approvals WHERE podcast = ? AND episode = ? AND clip_num = ?",
+            (podcast, episode, str(clip_num)),
+        ).fetchone()
+    finally:
+        connection.close()
+    return bool(row and isinstance(sha256, str) and secrets.compare_digest(row["sha256"], sha256))
+
+
+def enqueue_youtube_retry(podcast, episode, clip_num, retry_at=None, error=""):
+    """Schedule a quota-limited clip for an explicit future retry."""
+    if podcast not in PODCASTS or not episode or not str(clip_num).isdigit():
+        raise ValueError("Invalid upload retry identity.")
+    now = datetime.now(timezone.utc)
+    retry_at = retry_at or datetime.fromtimestamp(now.timestamp() + 24 * 60 * 60, timezone.utc).isoformat()
+    if not isinstance(retry_at, str) or not retry_at:
+        raise ValueError("Retry time must be an ISO timestamp.")
+    connection = _connect()
+    try:
+        with connection:
+            connection.execute(
+                """INSERT INTO youtube_retry_queue
+                   (podcast, episode, clip_num, retry_at, status, attempts, error, updated_at)
+                   VALUES (?, ?, ?, ?, 'queued', 0, ?, ?)
+                   ON CONFLICT(podcast, episode, clip_num) DO UPDATE SET
+                   retry_at=excluded.retry_at, status='queued', error=excluded.error,
+                   updated_at=excluded.updated_at""",
+                (podcast, episode, str(clip_num), retry_at, str(error or '')[:500], now.isoformat()),
+            )
+    finally:
+        connection.close()
+
+
+def list_youtube_retries(status=None, limit=100):
+    connection = _connect()
+    try:
+        if status:
+            rows = connection.execute(
+                "SELECT * FROM youtube_retry_queue WHERE status=? ORDER BY retry_at LIMIT ?",
+                (status, int(limit)),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                "SELECT * FROM youtube_retry_queue ORDER BY retry_at LIMIT ?", (int(limit),)
+            ).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        connection.close()
+
+
+def get_youtube_retry(podcast, episode, clip_num):
+    connection = _connect()
+    try:
+        row = connection.execute(
+            "SELECT * FROM youtube_retry_queue WHERE podcast=? AND episode=? AND clip_num=?",
+            (podcast, episode, str(clip_num)),
+        ).fetchone()
+        return dict(row) if row else None
+    finally:
+        connection.close()
+
+
+def claim_due_youtube_retry(now=None):
+    now = now or datetime.now(timezone.utc).isoformat()
+    connection = _connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        row = connection.execute(
+            "SELECT * FROM youtube_retry_queue WHERE status='queued' AND retry_at<=? ORDER BY retry_at LIMIT 1",
+            (now,),
+        ).fetchone()
+        if not row:
+            connection.commit()
+            return None
+        item = dict(row)
+        connection.execute(
+            "UPDATE youtube_retry_queue SET status='processing', attempts=attempts+1, updated_at=? "
+            "WHERE podcast=? AND episode=? AND clip_num=?",
+            (datetime.now(timezone.utc).isoformat(), item['podcast'], item['episode'], item['clip_num']),
+        )
+        connection.commit()
+        item['attempts'] += 1
+        item['status'] = 'processing'
+        return item
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
+
+
+def finish_youtube_retry(podcast, episode, clip_num, status, retry_at=None, error=""):
+    if status not in ("queued", "completed", "failed"):
+        raise ValueError("Invalid retry queue status.")
+    connection = _connect()
+    try:
+        with connection:
+            connection.execute(
+                "UPDATE youtube_retry_queue SET status=?, retry_at=COALESCE(?, retry_at), error=?, updated_at=? "
+                "WHERE podcast=? AND episode=? AND clip_num=?",
+                (status, retry_at, str(error or '')[:500], datetime.now(timezone.utc).isoformat(),
+                 podcast, episode, str(clip_num)),
+            )
+    finally:
+        connection.close()
+
+
 def set_submission_status(video_id, status, error_message=None):
     if not VIDEO_ID.fullmatch(video_id) or status not in SUBMISSION_STATUSES:
         raise ValueError("Invalid video ID or queue status.")
@@ -381,6 +544,27 @@ def set_submission_status(video_id, status, error_message=None):
         connection.close()
     if not changed:
         raise ValueError("Video ID not found in queue.")
+
+
+def claim_submission_retry(video_id):
+    """Atomically transition one pending/failed submission into active processing."""
+    if not VIDEO_ID.fullmatch(video_id):
+        raise ValueError("Invalid video ID.")
+    connection = _connect()
+    try:
+        connection.execute("BEGIN IMMEDIATE")
+        changed = connection.execute(
+            "UPDATE youtube_submissions SET status='in_progress', error_message='', last_error_at='' "
+            "WHERE video_id=? AND status IN ('pending', 'failed')",
+            (video_id,),
+        ).rowcount
+        connection.commit()
+        return bool(changed)
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def login_blocked(client_key):

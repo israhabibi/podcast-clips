@@ -1,0 +1,12 @@
+[Unit]
+Description=Post reviewed TOP 5 videos to Meta Threads
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/isra/podcast-clips
+EnvironmentFile=/home/isra/podcast-clips/app/.env
+EnvironmentFile=/home/isra/.hermes/.env
+Environment="PATH=/home/isra/podcast-clips/.venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=/home/isra/podcast-clips/.venv/bin/python /home/isra/podcast-clips/scripts/process_threads_queue.py

@@ -18,8 +18,9 @@ from app import app
 from app.admin_security import admin_configured, admin_required, check_csrf, csrf_token, is_admin, password_version
 from app.admin_store import (
     PODCASTS, add_submission, clear_login_attempts, login_blocked,
-    recent_submissions, record_failed_login, set_submission_status,
+    recent_submissions, record_failed_login, set_submission_status, claim_submission_retry,
     record_youtube_upload, claim_youtube_upload, get_youtube_upload, record_manual_upload,
+    approve_youtube_release, youtube_release_approved, enqueue_youtube_retry, get_youtube_retry,
     deployed_clip_metadata, get_setting, set_setting, delete_setting,
     get_llm_config, save_llm_config,
 )
@@ -28,6 +29,10 @@ from app.config import (
     TIKTOK_CLIENT_KEY, TIKTOK_CLIENT_SECRET, TIKTOK_TOKEN_FILE,
     YOUTUBE_CLIENT_ID, YOUTUBE_CLIENT_SECRET, YOUTUBE_TOKEN_FILE,
 )
+from app import config as provider_config, threads_client
+from app.routes import threads  # noqa: F401 - register account and settings routes
+from app.threads_publishing import auto_post_enabled, queue_top5, kick_worker
+from app.threads_store import get_post as get_threads_post, retry_post as retry_threads_post
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 WORK_ROOT = Path("/tmp/podcast-clips")
@@ -40,6 +45,29 @@ JOB_STAGES = {
 DEFAULT_PER_PAGE = 10
 ALLOWED_PER_PAGE = (5, 10, 25, 50, 100)
 UI_SELECT_PER_PAGE = (10, 25, 50, 100)
+
+
+def _threads_context():
+    return {
+        "threads_ready": bool(provider_config.THREADS_APP_ID and provider_config.THREADS_APP_SECRET),
+        "threads_account": threads_client.account_info(),
+        "threads_auto_post": auto_post_enabled(),
+    }
+
+
+def _queue_threads_top5(podcast, episode, media, video_id, title=None, description=None):
+    try:
+        if not auto_post_enabled():
+            return {"status": "disabled"}
+        if not threads_client.account_info()["connected"]:
+            return {"status": "not_connected"}
+        if title is None:
+            metadata = json.loads(media.with_suffix(media.suffix + ".metadata.json").read_text(encoding="utf-8"))
+            title, description = metadata.get("title", "TOP 5 MOMEN"), metadata.get("description", "")
+        return queue_top5(podcast, episode, "99", media, title, description or "", video_id)
+    except Exception as exc:
+        app.logger.warning("Threads queue failed: %s", type(exc).__name__)
+        return {"status": "failed", "error": "Antrean Threads gagal disiapkan. Coba lagi dari panel TOP 5."}
 
 _TOKEN_CHECK_CACHE = {"ts": 0.0, "youtube_valid": None, "youtube_token_seen": None}
 _TOKEN_CHECK_CACHE_TTL_SECONDS = 90
@@ -218,7 +246,7 @@ def _job_progress(item):
     if status == "ready_for_review":
         return {"label": "Siap direview", "stage": "Klip lokal siap direview", "percent": 100}
     if status == "failed":
-        return {"label": "Gagal", "stage": "Perlu diperiksa", "percent": 100}
+        return {"label": "Gagal", "stage": "Perlu diperiksa", "percent": 0, "percent_known": False}
 
     log_path = Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs")) / f"{item['video_id']}.log"
     try:
@@ -589,6 +617,10 @@ def _deployed_clips():
                     "clip_num": str(clip_num),
                     "title": caption.get("title", f"Clip {clip_num}"),
                     "upload": get_youtube_upload(podcast_dir.name, episode_dir.name, clip_num),
+                    "retry": get_youtube_retry(podcast_dir.name, episode_dir.name, clip_num),
+                    "release_approved": bool(manual_meta and youtube_release_approved(
+                        podcast_dir.name, episode_dir.name, clip_num, manual_meta.get("sha256", "")
+                    )),
                     "manual": manual_meta,
                 })
                 # --- Auto-generate the companion .metadata.json next to the clip once, if missing
@@ -761,6 +793,7 @@ def admin_page():
         "admin.html",
         csrf_token=csrf_token(),
         active_tab="dashboard",
+        **_threads_context(),
         podcasts=PODCASTS,
         submissions=sub_pager["items"],
         submissions_pager=sub_pager,
@@ -798,6 +831,7 @@ def admin_top5():
         "admin.html",
         csrf_token=csrf_token(),
         active_tab="top5",
+        **_threads_context(),
         podcasts=PODCASTS,
         compilation_episodes=_compilation_episodes(),
         youtube_ready=bool(YOUTUBE_CLIENT_ID and YOUTUBE_CLIENT_SECRET),
@@ -888,6 +922,7 @@ def admin_jobs():
             "stage": g["worst_progress"].get("stage", ""),
             "label": g["worst_progress"].get("label", ""),
             "percent": g["max_percent"],
+            "percent_known": g["worst_progress"].get("percent_known", True),
             "running_count": g["running_count"],
                 "pending_count": g["pending_count"],
                 "review_count": g["review_count"],
@@ -1133,6 +1168,7 @@ def admin_compilation_status(episode_id):
         return jsonify(status="invalid"), 404
     output_path = workdir / "clips" / "top5_compilation.mp4"
     deployed_path = _compilation_deployed_path(episode_id, workdir=workdir)
+    meta = _episode_meta_from_workdir(workdir)
     upload_info = _compilation_upload_status(episode_id, workdir=workdir)
     base = {}
     if deployed_path is not None:
@@ -1154,6 +1190,16 @@ def admin_compilation_status(episode_id):
             base["upload_url"] = f"https://youtube.com/watch?v={upload_info['video_id']}"
     else:
         base["upload_status"] = None
+    retry_info = get_youtube_retry(meta["podcast"], f"{meta['date']}_{_slug_filename_part(meta['slug'], 80)}", TOP5_CLIP_NUM) if meta else None
+    threads_info = get_threads_post(meta["podcast"], f"{meta['date']}_{_slug_filename_part(meta['slug'], 80)}") if meta else None
+    base["threads_status"] = threads_info["status"] if threads_info else ("disabled" if not auto_post_enabled() else "not_connected" if not threads_client.account_info()["connected"] else "not_queued")
+    if threads_info:
+        base["threads_post_id"] = threads_info["post_id"]
+        base["threads_url"] = threads_info["permalink"]
+        base["threads_error"] = threads_info["error"]
+    if retry_info:
+        base["retry_status"] = retry_info["status"]
+        base["retry_at"] = retry_info["retry_at"]
     if _compilation_is_locked(workdir):
         base["status"] = "running"
         return jsonify(**base)
@@ -1371,9 +1417,10 @@ def admin_compilation_upload(episode_id):
                    request.headers.get("X-Requested-With") == "XMLHttpRequest")
     if existing and existing.get("status") in ("uploaded", "manual"):
         vid = existing.get("video_id") or ""
+        threads_result = _queue_threads_top5(meta["podcast"], episode_folder, deployed, vid) if existing["status"] == "uploaded" else {"status": "not_queued"}
         if accept_json:
             return jsonify(ok=True, already_uploaded=True, status=existing["status"],
-                           video_id=vid, url=f"https://youtube.com/watch?v={vid}")
+                           video_id=vid, url=f"https://youtube.com/watch?v={vid}", threads=threads_result)
         flash(f"Top 5 sudah di-upload ({existing['status']}): {vid}", "success")
         return redirect(url_for("admin_top5"))
     if existing and existing.get("status") == "uploading":
@@ -1406,6 +1453,17 @@ def admin_compilation_upload(episode_id):
                  "compilation": True},
         clip_path=deployed,
     ) or {}
+    release_confirmed = payload.get("release_confirmed") is True if isinstance(payload, dict) else False
+    if release_confirmed and clip_meta.get("sha256"):
+        approve_youtube_release(meta["podcast"], episode_folder, TOP5_CLIP_NUM,
+                                clip_meta["sha256"], reviewed_by="admin")
+    if not youtube_release_approved(meta["podcast"], episode_folder, TOP5_CLIP_NUM,
+                                   clip_meta.get("sha256", "")):
+        msg = "Tinjau preview Top 5, lalu centang persetujuan rilis sebelum upload."
+        if accept_json:
+            return jsonify(error=msg, status="review_required"), 400
+        flash(msg, "error")
+        return redirect(url_for("admin_top5"))
     claimed, current = claim_youtube_upload(
         meta["podcast"], episode_folder, TOP5_CLIP_NUM,
         sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
@@ -1419,21 +1477,37 @@ def admin_compilation_upload(episode_id):
         return redirect(url_for("admin_top5"))
     try:
         from scripts.youtube_upload import upload_clip
-        result = upload_clip(str(deployed), caption_title, caption_desc.strip(), tags=tags)
-        def finalize_ok(flash_msg, flash_cat="success", extra_warn=None):
+        def record_insert(video_id):
             record_youtube_upload(
-                meta["podcast"], episode_folder, TOP5_CLIP_NUM, "uploaded",
+                meta["podcast"], episode_folder, TOP5_CLIP_NUM, "uploading", video_id=video_id,
+                sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
+            )
+        result = upload_clip(str(deployed), caption_title, caption_desc.strip(), tags=tags,
+                             release_approved=True, existing_video_id=(current or {}).get("video_id"),
+                             on_insert=record_insert)
+        def finalize_ok(flash_msg, flash_cat="success", extra_warn=None):
+            pending = bool(result.get("metadata_update_failed") or result.get("partial_success") or result.get("error"))
+            upload_status = "metadata_pending" if pending else "uploaded"
+            record_youtube_upload(
+                meta["podcast"], episode_folder, TOP5_CLIP_NUM, upload_status,
                 video_id=result.get("video_id"),
                 sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
                 error=extra_warn or "",
             )
+            if pending:
+                enqueue_youtube_retry(meta["podcast"], episode_folder, TOP5_CLIP_NUM,
+                                      error=extra_warn or "Metadata verification pending.")
+            threads_result = _queue_threads_top5(meta["podcast"], episode_folder, deployed,
+                                                result.get("video_id"), caption_title, caption_desc) if not pending else {"status": "waiting_youtube"}
             if accept_json:
-                return jsonify(ok=True, uploaded=True,
-                               status="uploaded",
+                return jsonify(ok=not pending, uploaded=True,
+                               status=upload_status,
                                video_id=result.get("video_id"),
                                url=result.get("url"),
                                title=result.get("title"),
-                               warning=extra_warn or result.get("warning"))
+                               threads=threads_result,
+                               error=extra_warn if pending else None,
+                               warning=extra_warn or result.get("warning")), 502 if pending else 200
             flash(flash_msg, flash_cat)
             return redirect(url_for("admin_top5"))
         if "error" in result:
@@ -1441,7 +1515,7 @@ def admin_compilation_upload(episode_id):
             is_invalid_grant = (bool(result.get("invalid_grant")) or
                                 "expired or dicabut" in message or
                                 "invalid_grant" in message)
-            partial_success = bool(result.get("partial_success")) and bool(result.get("video_id"))
+            partial_success = bool(result.get("video_id"))
             if partial_success:
                 return finalize_ok(
                     f"Upload BERHASIL ({result.get('video_id','')}) tapi: {message}",
@@ -1467,7 +1541,11 @@ def admin_compilation_upload(episode_id):
                 sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
             )
             if accept_json:
+                if status == "quota":
+                    enqueue_youtube_retry(meta["podcast"], episode_folder, TOP5_CLIP_NUM, error=err_msg)
                 return jsonify(error=err_msg, status=status, invalid_grant=is_invalid_grant), 502
+            if status == "quota":
+                enqueue_youtube_retry(meta["podcast"], episode_folder, TOP5_CLIP_NUM, error=err_msg)
             flash(err_msg, "error")
             return redirect(url_for("admin_top5"))
         # Sukses tanpa error (mungkin ada warning metadata)
@@ -1501,10 +1579,39 @@ def admin_compilation_upload(episode_id):
             error=err_msg[:500],
             sha256=clip_meta.get("sha256", ""), file_size=clip_meta.get("file_size", 0),
         )
+        if status == "quota":
+            enqueue_youtube_retry(meta["podcast"], episode_folder, TOP5_CLIP_NUM, error=err_msg)
         if accept_json:
             return jsonify(error=err_msg, status=status, invalid_grant=is_invalid_grant), 502
         flash(err_msg, "error")
         return redirect(url_for("admin_top5"))
+
+
+@app.route("/admin/compilation/threads/<episode_id>/retry", methods=["POST"])
+@admin_required()
+def admin_compilation_threads_retry(episode_id):
+    payload = request.get_json(silent=True) or {}
+    submitted = payload.get("csrf_token") if isinstance(payload, dict) else None
+    expected = session.get("admin_csrf")
+    if not expected or not isinstance(submitted, str) or not secrets.compare_digest(expected, submitted):
+        return jsonify(error="Invalid form token."), 400
+    workdir = _compilation_workdir(episode_id)
+    media = _compilation_deployed_path(episode_id, workdir=workdir) if workdir else None
+    if media is None:
+        return jsonify(error="Deploy dan upload TOP 5 ke YouTube dahulu."), 400
+    meta = _episode_meta_from_workdir(workdir)
+    podcast, episode = meta["podcast"], media.parent.name
+    upload = get_youtube_upload(podcast, episode, TOP5_CLIP_NUM)
+    if not upload or upload["status"] != "uploaded":
+        return jsonify(error="Selesaikan upload dan metadata YouTube TOP 5 dahulu."), 400
+    result = _queue_threads_top5(podcast, episode, media, upload["video_id"])
+    if result["status"] in ("failed", "needs_review"):
+        if retry_threads_post(podcast, episode):
+            kick_worker()
+            result = {"status": "queued"}
+    if result["status"] in ("disabled", "not_connected", "failed"):
+        return jsonify(error=result.get("error") or "Aktifkan auto-post dan hubungkan akun Threads dahulu.", threads=result), 400
+    return jsonify(ok=True, threads=result)
 
 
 @app.route("/admin/clips/<podcast>/<episode>/<clip_num>/upload", methods=["POST"])
@@ -1526,6 +1633,11 @@ def admin_upload_clip(podcast, episode, clip_num):
         return redirect(url_for("admin_page"))
     clip_path, caption = clip
     meta = deployed_clip_metadata(podcast, episode, clip_num, caption=caption, clip_path=clip_path) or {}
+    if request.form.get("release_approved") == "1":
+        approve_youtube_release(podcast, episode, clip_num, meta.get("sha256", ""), reviewed_by="admin")
+    if not youtube_release_approved(podcast, episode, clip_num, meta.get("sha256", "")):
+        flash("Tinjau klip dan konfirmasi persetujuan rilisnya sebelum upload API.", "error")
+        return redirect(url_for("admin_page"))
     claimed, current = claim_youtube_upload(
         podcast, episode, clip_num,
         sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0),
@@ -1539,34 +1651,24 @@ def admin_upload_clip(podcast, episode, clip_num):
     tags = ["shorts", "podcast", "indonesia", podcast, "tempo", "berita", "politik", "viral", "fyp", "news", "video", "opini", "analisis", "terkini", "podcastindonesia"]
     try:
         from scripts.youtube_upload import upload_clip
-        result = upload_clip(clip_path, caption.get("title", f"Clip {clip_num}"), caption.get("caption", "").strip(), tags=tags)
+        def record_insert(video_id):
+            record_youtube_upload(podcast, episode, clip_num, "uploading", video_id=video_id,
+                                  sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
+        result = upload_clip(clip_path, caption.get("title", f"Clip {clip_num}"),
+                             caption.get("caption", "").strip(), tags=tags, release_approved=True,
+                             existing_video_id=(current or {}).get("video_id"), on_insert=record_insert)
+        if result.get("video_id") and (result.get("error") or result.get("metadata_update_failed") or result.get("partial_success")):
+            message = result.get("error") or result.get("warning") or "Metadata verification pending."
+            record_youtube_upload(podcast, episode, clip_num, "metadata_pending",
+                                  video_id=result["video_id"], error=message,
+                                  sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
+            enqueue_youtube_retry(podcast, episode, clip_num, error=message)
+            flash(f"Video tersimpan ({result['video_id']}); metadata perlu dicoba lagi: {message}", "error")
+            return redirect(url_for("admin_page"))
         if "error" in result:
             message = result["error"]
             is_invalid_grant = bool(result.get("invalid_grant")) or "expired or dicabut" in message or "invalid_grant" in message
-            partial_success = bool(result.get("partial_success")) and bool(result.get("video_id"))
-            if partial_success:
-                # Video SUCCESSFULLY uploaded (we have video_id), token or metadata step had an error.
-                # Record as UPLOADED — don't mark a live video as "failed".
-                record_youtube_upload(podcast, episode, clip_num, "uploaded",
-                                      video_id=result.get("video_id"),
-                                      sha256=meta.get("sha256", ""),
-                                      file_size=meta.get("file_size", 0),
-                                      error=message)
-                if is_invalid_grant:
-                    try:
-                        if os.path.exists(YOUTUBE_TOKEN_FILE):
-                            os.remove(YOUTUBE_TOKEN_FILE)
-                    except OSError:
-                        pass
-                    flash(
-                        f"⚠️ Upload BERHASIL ({result.get('video_id','')}) tapi token YouTube KADALUARSA/DICABUT. "
-                        f"Klik HUBUNGKAN YOUTUBE di 'Koneksi akun upload' untuk reconnect sebelum upload berikutnya.",
-                        "error",
-                    )
-                else:
-                    flash(f"Upload BERHASIL ({result.get('url', result.get('video_id',''))}) tapi ada masalah metadata: {message}",
-                          "error")
-            elif is_invalid_grant:
+            if is_invalid_grant:
                 # Token invalid_grant dihapus sama upload_clip, kasih tahu user reconnect via button
                 try:
                     if os.path.exists(YOUTUBE_TOKEN_FILE):
@@ -1585,6 +1687,7 @@ def admin_upload_clip(podcast, episode, clip_num):
                 flash("Kuota upload harian habis — retry besok.", "error")
                 record_youtube_upload(podcast, episode, clip_num, status, error=message,
                                       sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
+                enqueue_youtube_retry(podcast, episode, clip_num, error=message)
             else:
                 status = "failed"
                 flash(f"Upload gagal: {message}", "error")
@@ -1618,6 +1721,8 @@ def admin_upload_clip(podcast, episode, clip_num):
             flash("Kuota harian habis — retry besok." if status == "quota" else f"Upload gagal: {message}", "error")
         record_youtube_upload(podcast, episode, clip_num, status, error=message,
                               sha256=meta.get("sha256", ""), file_size=meta.get("file_size", 0))
+        if status == "quota":
+            enqueue_youtube_retry(podcast, episode, clip_num, error=message)
     return redirect(url_for("admin_page"))
 
 
@@ -1638,6 +1743,9 @@ def admin_manual_upload_clip(podcast, episode, clip_num):
         flash(f"Clip already uploaded via API: {existing.get('video_id','')}", "error")
         return redirect(url_for("admin_page"))
     meta = deployed_clip_metadata(podcast, episode, clip_num, caption=caption, clip_path=clip_path) or {}
+    if not youtube_release_approved(podcast, episode, clip_num, meta.get("sha256", "")):
+        flash("Tinjau klip dan konfirmasi persetujuan rilis sebelum mencatat upload Studio.", "error")
+        return redirect(url_for("admin_page"))
     try:
         saved_id = record_manual_upload(
             podcast, episode, clip_num, video_id_or_url, reviewed_by=reviewer,
@@ -1676,6 +1784,28 @@ def admin_manual_upload_clip(podcast, episode, clip_num):
     except OSError:
         pass
     flash(f"Manual upload dicatat: https://youtu.be/{saved_id}", "success")
+    return redirect(url_for("admin_page"))
+
+
+@app.route("/admin/clips/<podcast>/<episode>/<clip_num>/approve-manual", methods=["POST"])
+@admin_required()
+def admin_approve_manual_upload_clip(podcast, episode, clip_num):
+    if not check_csrf():
+        return "Invalid form token.", 400
+    if request.form.get("release_approved") != "1":
+        flash("Centang persetujuan rilis setelah meninjau klip.", "error")
+        return redirect(url_for("admin_page"))
+    clip_info = _deployed_clip(podcast, episode, clip_num)
+    if clip_info is None:
+        flash("Clip or caption not found.", "error")
+        return redirect(url_for("admin_page"))
+    clip_path, caption = clip_info
+    meta = deployed_clip_metadata(podcast, episode, clip_num, caption=caption, clip_path=clip_path) or {}
+    if not meta.get("sha256"):
+        flash("Tidak bisa memverifikasi hash klip untuk persetujuan rilis.", "error")
+        return redirect(url_for("admin_page"))
+    approve_youtube_release(podcast, episode, clip_num, meta["sha256"], reviewed_by="admin")
+    flash("Rilis disetujui untuk file ini. Anda sekarang bisa membuka YouTube Studio.", "success")
     return redirect(url_for("admin_page"))
 
 
@@ -1728,4 +1858,38 @@ def admin_add_youtube_link():
                 flash(f"Pemrosesan video {video_id} dimulai. Status akan diperbarui di antrean.", "success")
         else:
             flash(f"Video {video_id} added to the pending queue.", "success")
+    return redirect(url_for("admin_page"))
+
+
+@app.route("/admin/youtube-links/<video_id>/retry", methods=["POST"])
+@admin_required()
+def admin_retry_youtube_link(video_id):
+    if not check_csrf():
+        return "Invalid form token.", 400
+    try:
+        claimed = claim_submission_retry(video_id)
+    except ValueError:
+        return "Invalid video ID.", 400
+    if not claimed:
+        flash("Retry tidak dimulai: item tidak ada, sedang berjalan, atau statusnya bukan pending/gagal.", "error")
+        return redirect(url_for("admin_page"))
+    log_dir = Path(os.environ.get("ADMIN_JOB_LOG_DIR", "/tmp/podcast-clips/jobs"))
+    log_path = log_dir / f"{video_id}.log"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+        with log_path.open("ab") as output:
+            subprocess.Popen(
+                [sys.executable, str(REPO_ROOT / "scripts" / "process_episode.py"), video_id],
+                cwd=str(REPO_ROOT),
+                env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                stdout=output,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except OSError as exc:
+        set_submission_status(video_id, "failed", error_message=f"Could not start retry worker: {exc}")
+        app.logger.exception("Could not start episode retry worker")
+        flash("Retry gagal dimulai. Periksa detail error dan log server.", "error")
+    else:
+        flash(f"Retry pemrosesan video {video_id} dimulai.", "success")
     return redirect(url_for("admin_page"))

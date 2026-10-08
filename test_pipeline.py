@@ -15,7 +15,8 @@ Cakupan:
 
 import sys, os, io, json, runpy, tempfile, unittest, logging, importlib.util
 import subprocess
-from contextlib import redirect_stdout
+import hashlib
+from contextlib import redirect_stdout, redirect_stderr
 from pathlib import Path
 from io import StringIO
 from unittest.mock import patch
@@ -91,9 +92,10 @@ class TestImports(unittest.TestCase):
 
 class TestClipQuality(unittest.TestCase):
     def setUp(self):
-        from clip_quality import format_timed_transcript, validate_clips
+        from clip_quality import format_timed_transcript, validate_clips, validate_clip_ranges
         self.format_timed_transcript = format_timed_transcript
         self.validate_clips = validate_clips
+        self.validate_clip_ranges = validate_clip_ranges
         self.segments = [
             {"start": 0.0, "end": 10.0, "text": "Pembukaan singkat."},
             {"start": 10.0, "end": 25.0, "text": "Kita bahas hasil riset terbaru."},
@@ -148,6 +150,151 @@ class TestClipQuality(unittest.TestCase):
         }]
         with self.assertRaisesRegex(ValueError, "segment boundaries"):
             self.validate_clips(clips, self.segments)
+
+    def test_renderer_range_validation_preserves_valid_ranges(self):
+        clips = [{"start": 10.0, "end": 50.0, "title": "Valid range"}]
+        self.assertEqual(self.validate_clip_ranges(clips, self.segments, 100), clips)
+
+    def test_renderer_rejects_invalid_time_ranges_before_rendering(self):
+        invalid_cases = [
+            ({"start": -1, "end": 40, "title": "Negative"}, "invalid range"),
+            ({"start": 50, "end": 40, "title": "Reversed"}, "invalid range"),
+            ({"start": 10, "end": float("nan"), "title": "NaN"}, "finite number"),
+            ({"start": 10, "end": float("inf"), "title": "Infinite"}, "finite number"),
+            ({"start": True, "end": 50, "title": "Bool"}, "finite number"),
+            ({"start": 0, "end": 80, "title": "Too long"}, "duration must be"),
+            ({"start": 40, "end": 80, "title": "Past end"}, "exceeds source duration"),
+        ]
+        for clip, message in invalid_cases:
+            with self.subTest(clip=clip), self.assertRaisesRegex(ValueError, message):
+                self.validate_clip_ranges([clip], self.segments, 70)
+        with self.assertRaisesRegex(ValueError, "not covered by transcript"):
+            self.validate_clip_ranges(
+                [{"start": 10, "end": 50, "title": "Uncovered"}],
+                [{"start": 0, "end": 5, "text": "Outside clip"}], 70,
+            )
+
+
+class TestEpisodeManifest(unittest.TestCase):
+    def test_manifest_lists_only_complete_media_and_matching_captions(self):
+        from episode_manifest import build_review_manifest, processing_manifest, write_manifest
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "clips").mkdir()
+            (root / "clips" / "show_episode_01.mp4").write_bytes(b"complete video")
+            clips = [{"start": 10, "end": 50, "title": "Moment", "filename": "show_episode_01.mp4"}]
+            captions = {"1": {"clip": "show_episode_01.mp4", "title": "Moment", "caption": "Ready for review"}}
+            manifest = build_review_manifest(root, "video1234567", "show", "Episode", clips, captions)
+            self.assertEqual(manifest["status"], "ready_for_review")
+            self.assertEqual(manifest["review_status"], "pending")
+            self.assertEqual(manifest["clips"][0]["file_size"], len(b"complete video"))
+            self.assertEqual(len(manifest["clips"][0]["sha256"]), 64)
+            self.assertEqual(manifest["clips"][0]["platform_upload_ids"], {})
+            write_manifest(root, processing_manifest("video1234567", "show", "Episode"))
+            self.assertEqual(json.loads((root / "episode_manifest.json").read_text())["status"], "processing")
+
+    def test_manifest_rejects_missing_media_and_incomplete_captions(self):
+        from episode_manifest import build_review_manifest
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "clips").mkdir()
+            clip = {"start": 10, "end": 50, "title": "Moment", "filename": "missing.mp4"}
+            caption = {"1": {"clip": "missing.mp4", "title": "Moment", "caption": "Caption"}}
+            with self.assertRaisesRegex(ValueError, "missing or empty"):
+                build_review_manifest(root, "video1234567", "show", "Episode", [clip], caption)
+            (root / "clips" / "missing.mp4").write_bytes(b"video")
+            with self.assertRaisesRegex(ValueError, "do not match"):
+                build_review_manifest(root, "video1234567", "show", "Episode", [clip], {})
+
+
+class TestRendererFailureHandling(unittest.TestCase):
+    def test_cut_failure_returns_nonzero_and_discards_partial_mp4(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            workspace = root / "workspace"
+            (workspace / "clips").mkdir(parents=True)
+            source = workspace / "source.mp4"
+            source.write_bytes(b"source")
+            (workspace / "clips.json").write_text(json.dumps([
+                {"start": 10, "end": 50, "title": "Moment", "filename": "moment.mp4"},
+            ]))
+            (workspace / "transcript.json").write_text(json.dumps([
+                {"start": 0, "end": 10, "text": "Intro"},
+                {"start": 10, "end": 50, "text": "A complete transcript segment."},
+            ]))
+            fake_bin = root / "bin"
+            fake_bin.mkdir()
+            ffprobe = fake_bin / "ffprobe"
+            ffprobe.write_text("#!/usr/bin/env python3\nprint('{\\\"format\\\":{\\\"duration\\\":\\\"100\\\"}}')\n")
+            ffmpeg = fake_bin / "ffmpeg"
+            ffmpeg.write_text("#!/usr/bin/env python3\nimport pathlib, sys\npathlib.Path(sys.argv[-1]).write_bytes(b'partial')\nsys.exit(7)\n")
+            ffprobe.chmod(0o755)
+            ffmpeg.chmod(0o755)
+            env = os.environ.copy()
+            env["PODCAST_WORK_DIR"] = str(workspace)
+            env["PATH"] = f"{fake_bin}{os.pathsep}{env.get('PATH', '')}"
+            result = subprocess.run(
+                [sys.executable, str(REPO_DIR / "cut.py"), str(source)],
+                cwd=str(REPO_DIR), env=env, capture_output=True, text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertFalse((workspace / "clips" / "moment.mp4").exists())
+            self.assertEqual(list((workspace / "clips").glob("*.tmp.mp4")), [])
+
+
+class TestCaptionFailClosed(unittest.TestCase):
+    def test_missing_api_key_exits_before_creating_caption_output(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.dict(os.environ, {"PODCAST_WORK_DIR": temp_dir, "HOME": temp_dir}, clear=True):
+                with self.assertRaisesRegex(SystemExit, "API key not found"):
+                    runpy.run_path(str(REPO_DIR / "caption.py"), run_name="__main__")
+            self.assertFalse((Path(temp_dir) / "captions.json").exists())
+
+    def test_empty_llm_output_fails_after_retries_without_caption_file(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            (workspace / "clips").mkdir()
+            (workspace / "clips" / "moment.mp4").write_bytes(b"video")
+            (workspace / "clips.json").write_text(json.dumps([
+                {"start": 10, "end": 50, "title": "Moment", "filename": "moment.mp4"},
+            ]))
+            (workspace / "transcript.json").write_text(json.dumps([
+                {"start": 10, "end": 50, "text": "A transcript segment."},
+            ]))
+            response = b'{"choices":[{"message":{"content":"  "}}]}'
+            with patch.dict(os.environ, {"PODCAST_WORK_DIR": temp_dir,
+                                        "HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY": "test-api-key"}), \
+                    patch("urllib.request.urlopen", side_effect=lambda *a, **k: io.BytesIO(response)) as urlopen, \
+                    patch("time.sleep"), redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                with self.assertRaisesRegex(RuntimeError, "LLM request failed after 3 attempts"):
+                    runpy.run_path(str(REPO_DIR / "caption.py"), run_name="__main__")
+            self.assertEqual(urlopen.call_count, 3)
+            self.assertFalse((workspace / "captions.json").exists())
+
+
+class TestFaceTracking(unittest.TestCase):
+    def test_no_face_fallback_centers_crop_within_video(self):
+        from face_tracking import smooth_track
+        width, height = 1920, 1080
+        crop_width = int(height * 9 / 16)
+        track = smooth_track([], 30, crop_width, width)
+        self.assertEqual(track, [(0, width / 2)])
+        crop_x = track[0][1] - crop_width / 2
+        self.assertGreaterEqual(crop_x, 0)
+        self.assertLessEqual(crop_x, width - crop_width)
+
+    def test_tracked_crop_positions_are_clamped_and_dimensions_checked(self):
+        from face_tracking import smooth_track, validate_video_dimensions
+        crop_width = validate_video_dimensions(1920, 1080)
+        track = smooth_track([(0, -1000), (10, 5000)], 10, crop_width, 1920)
+        for _, center_x in track:
+            crop_x = center_x - crop_width / 2
+            self.assertGreaterEqual(crop_x, 0)
+            self.assertLessEqual(crop_x, 1920 - crop_width)
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            validate_video_dimensions(0, 1080)
+        with self.assertRaisesRegex(ValueError, "cannot fit"):
+            validate_video_dimensions(100, 2000)
 
 
 class TestFlaskApp(unittest.TestCase):
@@ -216,12 +363,28 @@ class TestFlaskApp(unittest.TestCase):
             }]))
             (episode_dir / 'episode_data.json').write_text(json.dumps({'episode_title': 'Episode yang benar'}))
             (episode_dir / 'clip1.mp4').write_bytes(b'video')
+            healthy_dir = podcast_dir / 'episode-healthy'
+            healthy_dir.mkdir()
+            (healthy_dir / 'captions.json').write_text(json.dumps({
+                '1': {'clip': 'healthy.mp4', 'title': 'Episode sehat'}
+            }))
+            (healthy_dir / 'clips.json').write_text(json.dumps([{
+                'start': 0, 'end': 30, 'title': 'Klip sehat', 'hook': 'Hook sehat'
+            }]))
+            (healthy_dir / 'episode_data.json').write_text(json.dumps({'episode_title': 'Episode sehat'}))
+            (healthy_dir / 'healthy.mp4').write_bytes(b'video')
 
             with patch.object(clips, 'CLIPS_DIR', temp_dir):
-                self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 200)
+                valid_response = self.client.get('/clips/jelasin-dong/episode-valid')
+                self.assertEqual(valid_response.status_code, 200)
+                self.assertIn('Episode yang benar'.encode(), valid_response.data)
                 self.assertEqual(self.client.get('/clips/jelasin-dong/episode-missing').status_code, 404)
                 (episode_dir / 'captions.json').write_text('{broken json')
                 self.assertEqual(self.client.get('/clips/jelasin-dong/episode-valid').status_code, 404)
+                index_response = self.client.get('/')
+                self.assertEqual(index_response.status_code, 200)
+                self.assertIn('Episode sehat'.encode(), index_response.data)
+                self.assertNotIn('Episode yang benar'.encode(), index_response.data)
                 (episode_dir / 'captions.json').write_text(json.dumps({
                     '1': {'clip': 'clip1.mp4', 'title': 'Episode yang benar'}
                 }))
@@ -261,6 +424,17 @@ class TestAppInit(unittest.TestCase):
         )
         self.assertGreater(int(result.stdout.strip()), 0)
 
+    def test_missing_secret_is_rejected_in_production(self):
+        env = os.environ.copy()
+        env.pop('FLASK_SECRET_KEY', None)
+        env['APP_ENV'] = 'production'
+        result = subprocess.run(
+            [sys.executable, '-c', 'from app import app'],
+            cwd=REPO_DIR, env=env, capture_output=True, text=True,
+        )
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn('FLASK_SECRET_KEY must be configured in production', result.stderr)
+
 
 class TestCurateScript(unittest.TestCase):
     """Test 4: curate.py — validation & edge cases."""
@@ -289,9 +463,10 @@ class TestCurateScript(unittest.TestCase):
     def test_missing_transcript_exits(self):
         os.remove(self.tmp / "transcript.json")
         sys.argv = ['curate.py', 'test-model', 'jelasin-dong', 'Test Episode']
-        with self.assertRaises(FileNotFoundError):
-            source = (REPO_DIR / 'curate.py').read_text(encoding='utf-8')
-            exec(compile(source, str(REPO_DIR / 'curate.py'), 'exec'))
+        with patch("clip_quality.probe_source_duration", return_value=100):
+            with self.assertRaises(FileNotFoundError):
+                source = (REPO_DIR / 'curate.py').read_text(encoding='utf-8')
+                exec(compile(source, str(REPO_DIR / 'curate.py'), 'exec'))
 
     def test_podcast_slug_default(self):
         # Should use 'unknown' when no slug given
@@ -319,9 +494,10 @@ class TestCurateScript(unittest.TestCase):
         api_response = {
             "choices": [{"message": {"content": json.dumps(generated)}}]
         }
-        with patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(api_response).encode())):
-            with patch.object(sys, "argv", ["curate.py", "ignored", "jelasin-dong", "Test Episode"]):
-                runpy.run_path(str(REPO_DIR / "curate.py"), run_name="__main__")
+        with patch("clip_quality.probe_source_duration", return_value=100):
+            with patch("urllib.request.urlopen", return_value=io.BytesIO(json.dumps(api_response).encode())):
+                with patch.object(sys, "argv", ["curate.py", "ignored", "jelasin-dong", "Test Episode"]):
+                    runpy.run_path(str(REPO_DIR / "curate.py"), run_name="__main__")
 
         saved = json.loads((self.tmp / "clips.json").read_text(encoding="utf-8"))
         self.assertEqual((saved[0]["start"], saved[0]["end"]), (0.0, 40.0))
@@ -426,50 +602,31 @@ class TestCompilationWorker(unittest.TestCase):
             self.assertIn("EXIT_CODE=0", log.read_text(encoding="utf-8"))
 
 
-class TestCutSmartScript(unittest.TestCase):
-    """Test 6: cut_smart.py — subtitle timing logic."""
-    
-    def setUp(self):
-        self.tmp = create_temp_episode()
-        self.orig_workdir = os.environ.get('PODCAST_WORK_DIR')
-        os.environ['PODCAST_WORK_DIR'] = str(self.tmp)
+class TestSubtitleTiming(unittest.TestCase):
+    def test_short_segment_does_not_overflow(self):
+        from subtitle_timing import subtitle_chunks
 
-    def tearDown(self):
-        if self.orig_workdir:
-            os.environ['PODCAST_WORK_DIR'] = self.orig_workdir
-        else:
-            os.environ.pop('PODCAST_WORK_DIR', None)
+        chunks = subtitle_chunks([{"start": 0, "end": 10, "text": "satu dua tiga"}], 0, 10)
+        self.assertEqual(chunks, [(0, 10, "satu dua tiga")])
 
-    def test_subtitle_timing_bug(self):
-        """
-        Test bahwa subtitle chunk timing tidak overflow.
-        Bug lama: chunk end time dihitung (j+4)/len(words) yang bisa > 1.
-        Fix: pakai min(j+4, n_words).
-        """
-        # Test subtitle timing logic langsung tanpa import cut_smart
-        start, end = 0.0, 10.0
-        segs = [{"start": 0.0, "end": 10.0, "text": "satu dua tiga"}]
-        
-        subs = []
-        for s in segs:
-            if s["end"] <= start or s["start"] >= end:
-                continue
-            st = max(s["start"], start) - start
-            en = min(s["end"], end) - start
-            words = s["text"].split()
-            n_words = max(len(words), 1)
-            for j in range(0, n_words, 4):
-                chunk = " ".join(words[j:min(j+4, n_words)])
-                if chunk.strip():
-                    chunk_start = st + (en - st) * j / n_words
-                    chunk_end = st + (en - st) * min(j + 4, n_words) / n_words
-                    subs.append((chunk_start, chunk_end, chunk))
-        
-        # 3 words -> 1 chunk, timenya harus proporsional
-        self.assertEqual(len(subs), 1)
-        self.assertAlmostEqual(subs[0][0], 0.0)  # start = 0
-        self.assertAlmostEqual(subs[0][1], 10.0)  # end = min(3+4, 3)/3 * 10 = 3/3 * 10 = 10.0
-        self.assertEqual(subs[0][2], "satu dua tiga")
+    def test_boundary_overlaps_and_last_partial_chunk(self):
+        from subtitle_timing import subtitle_chunks
+
+        segments = [
+            {"start": 0, "end": 5, "text": "excluded before"},
+            {"start": 4, "end": 10, "text": "one two three four five"},
+            {"start": 10, "end": 16, "text": "last sentence"},
+            {"start": 15, "end": 20, "text": "excluded after"},
+        ]
+        chunks = subtitle_chunks(segments, 5, 15)
+        self.assertEqual(chunks, [
+            (0, 4, "one two three four"), (4, 5, "five"), (5, 10, "last sentence"),
+        ])
+
+    def test_blank_text_is_omitted(self):
+        from subtitle_timing import subtitle_chunks
+
+        self.assertEqual(subtitle_chunks([{"start": 0, "end": 1, "text": "  "}], 0, 1), [])
 
 
 class TestNewsOverlay(unittest.TestCase):
@@ -517,6 +674,14 @@ class TestUploadScripts(unittest.TestCase):
                 "1": {"clip": "clip01.mp4", "title": "Klip 1", "caption": "Caption 1"},
                 "2": {"clip": "clip02.mp4", "title": "Klip 2", "caption": "Caption 2"},
             }, f)
+        (self.tmp / "episode_manifest.json").write_text(json.dumps({
+            "status": "ready_for_review", "review_status": "pending",
+            "clips": [
+                {"filename": name, "sha256": hashlib.sha256((self.tmp / "clips" / name).read_bytes()).hexdigest(),
+                 "platform_upload_ids": {}}
+                for name in ("clip01.mp4", "clip02.mp4")
+            ],
+        }), encoding="utf-8")
         
         self.orig_workdir = os.environ.get('PODCAST_WORK_DIR')
         os.environ['PODCAST_WORK_DIR'] = str(self.tmp)
@@ -566,6 +731,28 @@ class TestUploadScripts(unittest.TestCase):
                 status = module.main(["all"])
         self.assertEqual(status, 1)
 
+    def test_tiktok_records_publish_id_and_skips_existing_inbox_item(self):
+        from unittest.mock import Mock
+        module = self.load_tiktok_uploader("scripts/tiktok_upload.py")
+        init_response = Mock(status_code=200)
+        init_response.json.return_value = {"data": {"upload_url": "https://upload.invalid/file", "publish_id": "publish-123"}}
+        inbox_response = Mock(status_code=200)
+        inbox_response.json.return_value = {"data": {}}
+        put_response = Mock(status_code=200)
+        with patch.object(module, "get_token", return_value=("fake-token", "fake-open-id")), \
+             patch.object(module.requests, "post", side_effect=[init_response, inbox_response]), \
+             patch.object(module.requests, "put", return_value=put_response):
+            result = module.upload_clip(self.tmp / "clips" / "clip01.mp4", "Caption", "1")
+        self.assertEqual(result["status"], "inbox")
+        manifest = json.loads((self.tmp / "episode_manifest.json").read_text(encoding="utf-8"))
+        self.assertEqual(
+            manifest["clips"][0]["platform_upload_ids"]["tiktok"],
+            {"publish_id": "publish-123", "status": "inbox"},
+        )
+        with patch.object(module, "upload_clip") as upload, redirect_stdout(StringIO()):
+            self.assertEqual(module.main(["1"]), 0)
+        upload.assert_not_called()
+
     def test_youtube_batch_returns_failure_when_any_upload_fails(self):
         module_name = "youtube_upload_test_status"
         spec = importlib.util.spec_from_file_location(
@@ -579,6 +766,12 @@ class TestUploadScripts(unittest.TestCase):
             "YOUTUBE_TOKEN_FILE": str(token_path),
         }):
             spec.loader.exec_module(module)
+        manifest_path = self.tmp / "episode_manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["review_status"] = "approved"
+        for item in manifest["clips"]:
+            item["review_status"] = "approved"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
         with patch.object(
             module,
             "upload_clip",
@@ -588,23 +781,321 @@ class TestUploadScripts(unittest.TestCase):
                 status = module.main(["all"])
         self.assertEqual(status, 1)
 
+    def test_youtube_release_strips_news_urls_and_requires_manifest_match(self):
+        import hashlib
+        module_name = "youtube_upload_test_review_gate"
+        spec = importlib.util.spec_from_file_location(module_name, REPO_DIR / "scripts/youtube_upload.py")
+        module = importlib.util.module_from_spec(spec)
+        token_path = self.tmp / "youtube-token.json"
+        token_path.write_text("{}", encoding="utf-8")
+        with patch.dict(os.environ, {
+            "PODCAST_WORK_DIR": str(self.tmp), "YOUTUBE_TOKEN_FILE": str(token_path),
+        }):
+            spec.loader.exec_module(module)
+        self.assertEqual(module._youtube_description("News https://example.com/story\nSecond line"), "News\nSecond line")
+
+        clip_path = self.tmp / "clips" / "clip01.mp4"
+        digest = hashlib.sha256(clip_path.read_bytes()).hexdigest()
+        manifest = {
+            "status": "ready_for_review", "review_status": "approved",
+            "clips": [{"filename": "clip01.mp4", "sha256": digest,
+                       "review_status": "approved", "platform_upload_ids": {}}],
+        }
+        (self.tmp / "episode_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        # A caption cannot smuggle a different file into an otherwise approved release.
+        with open(self.tmp / "captions.json", "w", encoding="utf-8") as f:
+            json.dump({"1": {"clip": "clip02.mp4", "title": "Klip", "caption": "Caption"}}, f)
+        with patch.object(module, "upload_clip") as upload, redirect_stdout(StringIO()):
+            self.assertEqual(module.main(["all"]), 1)
+        upload.assert_not_called()
+
+    def test_youtube_upload_blocks_token_for_unexpected_channel(self):
+        from unittest.mock import Mock
+
+        module_name = "youtube_upload_test_channel_identity"
+        spec = importlib.util.spec_from_file_location(module_name, REPO_DIR / "scripts/youtube_upload.py")
+        module = importlib.util.module_from_spec(spec)
+        token_path = self.tmp / "youtube-token.json"
+        token_path.write_text("{}", encoding="utf-8")
+        with patch.dict(os.environ, {
+            "PODCAST_WORK_DIR": str(self.tmp),
+            "YOUTUBE_TOKEN_FILE": str(token_path),
+            "YOUTUBE_EXPECTED_CHANNEL_ID": "expected-channel-id",
+        }):
+            spec.loader.exec_module(module)
+
+        creds = Mock(valid=True)
+        service = Mock()
+        service.channels.return_value.list.return_value.execute.return_value = {
+            "items": [{"id": "wrong-channel-id"}],
+        }
+        with patch.dict(os.environ, {"YOUTUBE_EXPECTED_CHANNEL_ID": "expected-channel-id"}), \
+             patch.object(module.Credentials, "from_authorized_user_file", return_value=creds), \
+             patch.object(module, "build", return_value=service):
+            result = module.upload_clip(
+                self.tmp / "clips" / "clip01.mp4", "Caption", "Description",
+                release_approved=True,
+            )
+
+        self.assertIn("does not match YOUTUBE_EXPECTED_CHANNEL_ID", result["error"])
+        service.videos.assert_not_called()
+
+    def test_youtube_channel_identity_check_requires_configured_id(self):
+        from unittest.mock import Mock
+
+        module_name = "youtube_upload_test_missing_channel_id"
+        spec = importlib.util.spec_from_file_location(module_name, REPO_DIR / "scripts/youtube_upload.py")
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(os.environ, {"PODCAST_WORK_DIR": str(self.tmp)}, clear=False):
+            os.environ.pop("YOUTUBE_EXPECTED_CHANNEL_ID", None)
+            spec.loader.exec_module(module)
+        with self.assertRaisesRegex(ValueError, "Set YOUTUBE_EXPECTED_CHANNEL_ID"):
+            module._verify_youtube_channel(Mock())
+
+    def load_youtube_uploader(self):
+        spec = importlib.util.spec_from_file_location("youtube_metadata_tests", REPO_DIR / "scripts/youtube_upload.py")
+        module = importlib.util.module_from_spec(spec)
+        token_path = self.tmp / "youtube-token.json"
+        token_path.write_text("{}", encoding="utf-8")
+        with patch.dict(os.environ, {"PODCAST_WORK_DIR": str(self.tmp), "YOUTUBE_TOKEN_FILE": str(token_path)}):
+            spec.loader.exec_module(module)
+        return module
+
+    def test_youtube_metadata_defaults_and_title_limits(self):
+        module = self.load_youtube_uploader()
+        title, description, tags, category = module._clean_metadata(
+            "Long " * 30 + " #SHORTS #Shorts", "Caption https://example.com/article", None, 25,
+        )
+        self.assertLessEqual(len(title), 100)
+        self.assertEqual(title.lower().count("#shorts"), 1)
+        self.assertTrue(title.endswith(" #Shorts"))
+        self.assertEqual(description, "Caption")
+        self.assertEqual(len(tags), 15)
+        self.assertEqual(category, "25")
+        self.assertEqual(module._clean_metadata("Title", "", ["News", " news ", "custom"], 25)[2], ["News", "custom"])
+
+    def test_youtube_metadata_verifies_all_persisted_fields(self):
+        from unittest.mock import Mock
+        module = self.load_youtube_uploader()
+        snippet = {"title": "Title #Shorts", "description": "Description", "categoryId": "25", "tags": ["first", "second"]}
+        good = {"items": [{"id": "video123", "snippet": snippet}]}
+        variants = [good, {"items": []}]
+        for field in snippet:
+            variants.append({"items": [{"id": "video123", "snippet": {key: value for key, value in snippet.items() if key != field}}]})
+        variants.append({"items": [{"id": "video123", "snippet": {**snippet, "tags": ["first"]}}]})
+        for index, payload in enumerate(variants):
+            with self.subTest(index=index), \
+                 patch.object(module._requests, "put", return_value=Mock(status_code=200)) as put, \
+                 patch.object(module._requests, "get", return_value=Mock(status_code=200, json=lambda: payload)) as get:
+                if index == 0:
+                    self.assertTrue(module._update_video_metadata_raw(Mock(valid=True, token="test"), "video123", snippet["title"], snippet["description"], snippet["tags"], "25"))
+                else:
+                    with self.assertRaises(RuntimeError):
+                        module._update_video_metadata_raw(Mock(valid=True, token="test"), "video123", snippet["title"], snippet["description"], snippet["tags"], "25")
+                self.assertEqual(put.call_args.kwargs["json"]["snippet"], snippet)
+                get.assert_called_once()
+
+    def test_youtube_persists_insert_id_then_retries_metadata_in_place(self):
+        from unittest.mock import Mock
+        module = self.load_youtube_uploader()
+        service = Mock()
+        service.videos.return_value.insert.return_value.execute.return_value = {"id": "existing123"}
+        recorded = []
+        def metadata_check(*args):
+            self.assertEqual(recorded, ["existing123"])
+            raise RuntimeError("tags missing")
+        with patch.object(module.Credentials, "from_authorized_user_file", return_value=Mock(valid=True)), \
+             patch.object(module, "build", return_value=service), \
+             patch.object(module, "_verify_youtube_channel"), \
+             patch.object(module, "MediaFileUpload"), \
+             patch.object(module, "_update_video_metadata_raw", side_effect=metadata_check):
+            first = module.upload_clip(self.tmp / "clips/clip01.mp4", "Title", "Description",
+                                       release_approved=True, on_insert=recorded.append)
+        self.assertTrue(first["metadata_update_failed"])
+        self.assertEqual(first["video_id"], "existing123")
+        manifest = json.loads((self.tmp / "episode_manifest.json").read_text())
+        self.assertEqual(manifest["clips"][0]["platform_upload_ids"]["youtube"]["metadata_status"], "pending")
+        service.reset_mock()
+        with patch.object(module.Credentials, "from_authorized_user_file", return_value=Mock(valid=True)), \
+             patch.object(module, "build", return_value=service), \
+             patch.object(module, "_verify_youtube_channel"), \
+             patch.object(module, "_update_video_metadata_raw", return_value=True):
+            repaired = module.upload_clip(self.tmp / "clips/clip01.mp4", "Title", "Description",
+                                          release_approved=True, existing_video_id="existing123", on_insert=recorded.append)
+        service.videos.assert_not_called()
+        self.assertNotIn("metadata_update_failed", repaired)
+        self.assertEqual(recorded, ["existing123"])
+        manifest = json.loads((self.tmp / "episode_manifest.json").read_text())
+        self.assertEqual(manifest["clips"][0]["platform_upload_ids"]["youtube"]["metadata_status"], "complete")
+
+    def test_youtube_cli_reports_pending_metadata_as_failure(self):
+        module = self.load_youtube_uploader()
+        module._approve_manifest_release()
+        for args in (["1"], ["all"]):
+            with self.subTest(args=args), redirect_stdout(StringIO()), \
+                 patch.object(module, "upload_clip", return_value={"video_id": "existing123", "url": "https://youtu.be/existing123", "metadata_update_failed": True, "warning": "tags missing"}):
+                self.assertEqual(module.main(args), 1)
+
+    def test_youtube_retry_repairs_metadata_without_duplicate_insert(self):
+        import hashlib
+        module_name = "youtube_upload_test_retry"
+        spec = importlib.util.spec_from_file_location(module_name, REPO_DIR / "scripts/youtube_upload.py")
+        module = importlib.util.module_from_spec(spec)
+        token_path = self.tmp / "youtube-token.json"
+        token_path.write_text("{}", encoding="utf-8")
+        with patch.dict(os.environ, {
+            "PODCAST_WORK_DIR": str(self.tmp), "YOUTUBE_TOKEN_FILE": str(token_path),
+        }):
+            spec.loader.exec_module(module)
+        clip_path = self.tmp / "clips" / "clip01.mp4"
+        digest = hashlib.sha256(clip_path.read_bytes()).hexdigest()
+        manifest = {
+            "status": "ready_for_review", "review_status": "approved",
+            "clips": [{"filename": "clip01.mp4", "sha256": digest, "review_status": "approved",
+                       "platform_upload_ids": {"youtube": {"video_id": "existing123", "metadata_status": "pending"}}}],
+        }
+        (self.tmp / "episode_manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with patch.object(module, "_retry_existing_video_metadata") as repair, \
+             patch.object(module, "upload_clip") as upload, redirect_stdout(StringIO()):
+            self.assertEqual(module.main(["1"]), 0)
+        repair.assert_called_once()
+        upload.assert_not_called()
+
+    def test_scheduled_youtube_retry_uploads_only_digest_approved_media(self):
+        import hashlib
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import Mock
+        from app.admin_store import (
+            approve_youtube_release, enqueue_youtube_retry, get_youtube_retry,
+            get_youtube_upload,
+        )
+        from scripts import process_youtube_queue
+
+        with patch.dict(os.environ, {"ADMIN_DB_PATH": str(self.tmp / "queue.sqlite3")}):
+            clips_root = self.tmp / "deployed"
+            episode = clips_root / "bocor-alus" / "episode-one"
+            episode.mkdir(parents=True)
+            (episode / "captions.json").write_text(json.dumps({
+                "1": {"clip": "clip01.mp4", "title": "Reviewed clip", "caption": "Caption"},
+            }), encoding="utf-8")
+            media = episode / "clip01.mp4"
+            media.write_bytes(b"approved media")
+            digest = hashlib.sha256(media.read_bytes()).hexdigest()
+            approve_youtube_release("bocor-alus", "episode-one", "1", digest)
+            due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+            enqueue_youtube_retry("bocor-alus", "episode-one", "1", retry_at=due, error="quota")
+            with patch.object(process_youtube_queue, "YOUTUBE_CLIPS_ROOT", clips_root):
+                result = process_youtube_queue.process_due(
+                    uploader=Mock(return_value={"video_id": "scheduled123", "url": "https://youtu.be/scheduled123"})
+                )
+            self.assertEqual(result, 0)
+            self.assertEqual(get_youtube_retry("bocor-alus", "episode-one", "1")["status"], "completed")
+            self.assertEqual(get_youtube_upload("bocor-alus", "episode-one", "1")["video_id"], "scheduled123")
+
+    def test_scheduled_youtube_retry_rejects_changed_media_without_upload(self):
+        import hashlib
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import Mock
+        from app.admin_store import approve_youtube_release, enqueue_youtube_retry, get_youtube_retry
+        from scripts import process_youtube_queue
+
+        with patch.dict(os.environ, {"ADMIN_DB_PATH": str(self.tmp / "queue-changed.sqlite3")}):
+            clips_root = self.tmp / "deployed-changed"
+            episode = clips_root / "bocor-alus" / "episode-one"
+            episode.mkdir(parents=True)
+            (episode / "captions.json").write_text(json.dumps({
+                "1": {"clip": "clip01.mp4", "title": "Reviewed clip", "caption": "Caption"},
+            }), encoding="utf-8")
+            media = episode / "clip01.mp4"
+            media.write_bytes(b"first version")
+            approved_digest = hashlib.sha256(media.read_bytes()).hexdigest()
+            approve_youtube_release("bocor-alus", "episode-one", "1", approved_digest)
+            media.write_bytes(b"changed version")
+            due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+            enqueue_youtube_retry("bocor-alus", "episode-one", "1", retry_at=due, error="quota")
+            upload = Mock()
+            with patch.object(process_youtube_queue, "YOUTUBE_CLIPS_ROOT", clips_root), \
+                 redirect_stderr(StringIO()):
+                result = process_youtube_queue.process_due(uploader=upload)
+            self.assertEqual(result, 1)
+            upload.assert_not_called()
+            self.assertEqual(get_youtube_retry("bocor-alus", "episode-one", "1")["status"], "failed")
+
+    def test_scheduled_youtube_retry_preserves_pending_video_id(self):
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import Mock
+        from app.admin_store import (
+            approve_youtube_release, enqueue_youtube_retry, get_youtube_retry,
+            get_youtube_upload, record_youtube_upload,
+        )
+        from scripts import process_youtube_queue
+        with patch.dict(os.environ, {"ADMIN_DB_PATH": str(self.tmp / "metadata-queue.sqlite3")}):
+            root = self.tmp / "metadata-deployed"
+            episode = root / "bocor-alus/episode-one"
+            episode.mkdir(parents=True)
+            media = episode / "clip01.mp4"
+            media.write_bytes(b"approved media")
+            (episode / "captions.json").write_text(json.dumps({"1": {"clip": media.name, "title": "Title", "caption": "Description"}}))
+            key = ("bocor-alus", "episode-one", "1")
+            digest = hashlib.sha256(media.read_bytes()).hexdigest()
+            approve_youtube_release(*key, digest)
+            record_youtube_upload(*key, "metadata_pending", video_id="existing123", sha256=digest)
+            due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+            enqueue_youtube_retry(*key, retry_at=due)
+            pending = Mock(return_value={"video_id": "existing123", "metadata_update_failed": True, "warning": "tags missing"})
+            with patch.object(process_youtube_queue, "YOUTUBE_CLIPS_ROOT", root):
+                self.assertEqual(process_youtube_queue.process_due(uploader=pending), 1)
+            self.assertEqual(pending.call_args.kwargs["existing_video_id"], "existing123")
+            self.assertEqual(get_youtube_upload(*key)["video_id"], "existing123")
+            self.assertEqual(get_youtube_upload(*key)["status"], "metadata_pending")
+            self.assertEqual(get_youtube_retry(*key)["status"], "queued")
+            enqueue_youtube_retry(*key, retry_at=due)
+            repaired = Mock(return_value={"video_id": "existing123", "url": "https://youtu.be/existing123"})
+            with patch.object(process_youtube_queue, "YOUTUBE_CLIPS_ROOT", root):
+                self.assertEqual(process_youtube_queue.process_due(uploader=repaired), 0)
+            self.assertEqual(repaired.call_args.kwargs["existing_video_id"], "existing123")
+            self.assertEqual(get_youtube_upload(*key)["status"], "uploaded")
+            self.assertEqual(get_youtube_retry(*key)["status"], "completed")
+
+    def test_scheduled_youtube_retry_requeues_quota_for_tomorrow(self):
+        import hashlib
+        from datetime import datetime, timedelta, timezone
+        from unittest.mock import Mock
+        from app.admin_store import approve_youtube_release, enqueue_youtube_retry, get_youtube_retry
+        from scripts import process_youtube_queue
+
+        with patch.dict(os.environ, {"ADMIN_DB_PATH": str(self.tmp / "queue-quota.sqlite3")}):
+            clips_root = self.tmp / "deployed-quota"
+            episode = clips_root / "bocor-alus" / "episode-one"
+            episode.mkdir(parents=True)
+            (episode / "captions.json").write_text(json.dumps({
+                "1": {"clip": "clip01.mp4", "title": "Reviewed clip", "caption": "Caption"},
+            }), encoding="utf-8")
+            media = episode / "clip01.mp4"
+            media.write_bytes(b"approved media")
+            digest = hashlib.sha256(media.read_bytes()).hexdigest()
+            approve_youtube_release("bocor-alus", "episode-one", "1", digest)
+            due = (datetime.now(timezone.utc) - timedelta(seconds=2)).isoformat()
+            enqueue_youtube_retry("bocor-alus", "episode-one", "1", retry_at=due, error="quota")
+            upload = Mock(return_value={"error": "uploadLimitExceeded"})
+            with patch.object(process_youtube_queue, "YOUTUBE_CLIPS_ROOT", clips_root), \
+                 patch.object(process_youtube_queue, "_retry_time", return_value="2099-01-01T00:00:00+00:00"), \
+                 redirect_stderr(StringIO()):
+                result = process_youtube_queue.process_due(uploader=upload)
+            self.assertEqual(result, 0)
+            self.assertEqual(get_youtube_retry("bocor-alus", "episode-one", "1")["status"], "queued")
+            self.assertEqual(get_youtube_retry("bocor-alus", "episode-one", "1")["retry_at"], "2099-01-01T00:00:00+00:00")
+            upload.assert_called_once()
+
     def test_tiktok_upload_shim_forwards(self):
         """Shim in hermes-skill/scripts/tiktok_upload.py forwards to the real script
-        via subprocess. Running it produces real-script error output (e.g. OAuth missing,
-        captions file missing, or live API 401) rather than any shim-level error string
-        such as "target script missing" or "could not find the podcast-clips repository".
-        We cannot easily mock network in a subprocess, so any real-script error text counts
-        as success — what we are really testing is the forward was routed correctly."""
+        via subprocess. With no OAuth token, the real script must emit its expected
+        authentication error without making a network request."""
         import subprocess as _sp
         shim = str(REPO_DIR / "hermes-skill/scripts/tiktok_upload.py")
-        # Fake token file so OAuth guard passes (forces the real script to move past
-        # the "Belum OAuth" error to a later guard — in practice this hits the live
-        # TikTok API with a bad token and returns a 401 body).
-        token_path = self.tmp / "tiktok_token_fake.json"
-        token_path.write_text(json.dumps({"access_token": "fake-test", "open_id": "fake-open"}))
         env = os.environ.copy()
         env["PODCAST_WORK_DIR"] = str(self.tmp)
-        env["TIKTOK_TOKEN_FILE"] = str(token_path)
+        env.pop("TIKTOK_TOKEN_FILE", None)
         proc = _sp.run(
             [sys.executable, shim, "all"],
             cwd=str(self.tmp),
@@ -630,9 +1121,7 @@ class TestUploadScripts(unittest.TestCase):
             )),
             msg=f"Shim output looks wrong — no real tiktok_upload markers found. stdout/stderr: {combined}"
         )
-        # Real script returns 0 (no success for every clip with explicit per-item
-        # failure markers in output) or 1 on global missing-input exits. Both accept.
-        self.assertIn(proc.returncode, (0, 1))
+        self.assertEqual(proc.returncode, 1)
 
     def test_tiktok_uploaders_fail_on_missing_inputs_before_upload(self):
         # Single maintained implementation: scripts/tiktok_upload.py.
@@ -673,6 +1162,88 @@ class TestMonitorScript(unittest.TestCase):
         self.assertIn("PLkiSnq8pdz9TC0rHIiguTsgelilKeR3pw", content)
         self.assertIn("PLkiSnq8pdz9T3QQVbczz4XVgsHjjJK3vd", content)
         self.assertIn("PLkiSnq8pdz9SBWNzd65VKlI4uzLv4_p41", content)
+
+    def test_discovery_records_without_completing_and_emits_compatible_line(self):
+        import monitor
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_dir = Path(temp_dir) / "state"
+            with patch.object(monitor, "STATE_DIR", state_dir), \
+                    patch.object(monitor, "STATE_FILE", state_dir / "episodes.json"), \
+                    patch.object(monitor, "LOCK_FILE", state_dir / "lock"), \
+                    patch.object(monitor, "LEGACY_STATE_FILE", Path(temp_dir) / "legacy.txt"), \
+                    patch.object(monitor, "PLAYLISTS", {"jelasin-dong": "playlist"}), \
+                    patch.object(monitor, "_fetch_playlist", return_value=[{
+                        "video_id": "video1234567", "title": "Episode baru",
+                        "published": "2026-10-07T00:00:00Z", "podcast": "jelasin-dong",
+                    }]):
+                output = StringIO()
+                with redirect_stdout(output):
+                    monitor.discover()
+                state = json.loads((state_dir / "episodes.json").read_text())
+                self.assertEqual(state["video1234567"]["status"], "discovered")
+                self.assertIn("NEW:jelasin-dong:video1234567:Episode baru", output.getvalue())
+
+                output = StringIO()
+                with redirect_stdout(output):
+                    monitor.discover()
+                self.assertIn("NEW:jelasin-dong:video1234567:Episode baru", output.getvalue())
+
+                monitor._set_status("video1234567", "in_progress")
+                monitor._set_status("video1234567", "failed", "worker failed")
+                output = StringIO()
+                with redirect_stdout(output):
+                    monitor.discover()
+                self.assertIn("NEW:jelasin-dong:video1234567:Episode baru", output.getvalue())
+                monitor._set_status("video1234567", "in_progress")
+                monitor._set_status("video1234567", "completed")
+                output = StringIO()
+                with redirect_stdout(output):
+                    monitor.discover()
+                self.assertEqual(output.getvalue().strip(), "NO_NEW")
+
+    def test_lifecycle_retries_failures_and_rejects_completed_reprocessing(self):
+        import monitor
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_dir = Path(temp_dir) / "state"
+            state_dir.mkdir()
+            paths = {
+                "STATE_DIR": state_dir,
+                "STATE_FILE": state_dir / "episodes.json",
+                "LOCK_FILE": state_dir / "lock",
+                "LEGACY_STATE_FILE": Path(temp_dir) / "legacy.txt",
+            }
+            with patch.multiple(monitor, **paths):
+                monitor._write_state_raw({"video1234567": {
+                    "video_id": "video1234567", "status": "discovered", "attempts": 0,
+                }})
+                with redirect_stdout(StringIO()):
+                    monitor._set_status("video1234567", "in_progress")
+                    monitor._set_status("video1234567", "failed", "render failed")
+                    monitor._retry_failed()
+                    monitor._set_status("video1234567", "in_progress")
+                    monitor._set_status("video1234567", "completed")
+                state = json.loads((state_dir / "episodes.json").read_text())
+                self.assertEqual(state["video1234567"]["status"], "completed")
+                self.assertEqual(state["video1234567"]["attempts"], 2)
+                with self.assertRaises(SystemExit):
+                    with redirect_stdout(StringIO()), redirect_stderr(StringIO()):
+                        monitor._set_status("video1234567", "failed")
+                self.assertEqual(json.loads((state_dir / "episodes.json").read_text())[
+                    "video1234567"]["status"], "completed")
+
+    def test_atomic_state_write_preserves_previous_file_on_replace_failure(self):
+        import monitor
+        with tempfile.TemporaryDirectory() as temp_dir:
+            state_dir = Path(temp_dir) / "state"
+            with patch.object(monitor, "STATE_DIR", state_dir), \
+                    patch.object(monitor, "STATE_FILE", state_dir / "episodes.json"):
+                monitor._write_state_raw({"old": {"status": "completed"}})
+                with patch.object(monitor.os, "replace", side_effect=OSError("disk error")):
+                    with self.assertRaises(OSError):
+                        monitor._write_state_raw({"new": {"status": "discovered"}})
+                self.assertEqual(json.loads((state_dir / "episodes.json").read_text()),
+                                 {"old": {"status": "completed"}})
+                self.assertEqual(list(state_dir.glob(".state-*")), [])
 
 
 class TestGitignore(unittest.TestCase):

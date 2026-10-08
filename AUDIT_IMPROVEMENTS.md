@@ -1,8 +1,21 @@
-# Code audit: improvements needed
+# Historical code audit and current implementation status
 
-This report covers the Flask gallery, OAuth routes, episode pipeline, upload scripts, and tests in this repository. Findings are based on the checked-in code. No production configuration, running service, or external API was tested.
+This report preserves findings from the original audit of the Flask gallery, OAuth routes, episode pipeline, upload scripts, and tests. The findings describe the code state at that time, not current unimplemented work. No production configuration, running service, or external API was tested by that audit.
 
-**Status note:** This is the original audit baseline. The local `/admin` implementation now addresses parts of the OAuth access and state findings. See [REMEDIATION_KANBAN.md](REMEDIATION_KANBAN.md) for current progress and remaining verification.
+**Status note (2026-10-07):** Findings below preserve the original audit context. Current implementation status is recorded in [REMEDIATION_KANBAN.md](REMEDIATION_KANBAN.md); completed code changes include OAuth guards/state/token safety, lifecycle retries, shared clip validation, failure manifests, YouTube release/idempotency, TikTok inbox idempotency, gallery isolation, setup checks, and regression tests. Live OAuth/provider verification and GitHub branch protection remain outstanding.
+
+| Finding | Current code status | Remaining verification |
+| --- | --- | --- |
+| 1. Restrict OAuth account linking | Implemented; regression tests cover access checks and callback guards. | Live YouTube/TikTok browser flows and session persistence across restart. |
+| 2. Reject missing TikTok OAuth state | Implemented and mocked state/reuse tests pass. | Live provider flow. |
+| 3. Fix TikTok captions path | Implemented in canonical uploader and forwarding shim. | None in code. |
+| 4. Episode lifecycle and retry | Implemented with atomic state and rediscovery. | Confirm production scheduler invokes lifecycle commands. |
+| 5. Validate clip ranges | Shared validation runs at curation and rendering boundaries. | None in code. |
+| 6. Prevent silent partial publication | Manifests, YouTube release gate/idempotency, and TikTok inbox IDs implemented. | Live publication metadata and inbox behavior. |
+| 7. Gallery episode routing | Implemented and covered by route regressions. | None in code. |
+| 8. Face tracking and setup portability | Center fallback, clamping, configurable paths, and preflight implemented. | Production host dependency check. |
+| 9. Regression tests | Fresh-environment test suite passes; no live publication in tests. | None in code. |
+| 10. Dependencies and branch protection | Dependency/setup/docs work implemented. | Enable the retry timer on the server and configure GitHub ruleset with admin access. |
 
 ## Priority 0: secure account linking
 
@@ -16,7 +29,7 @@ This report covers the Flask gallery, OAuth routes, episode pipeline, upload scr
 
 1. Require administrator access before starting either OAuth flow. Keep callbacks bound to the same authenticated session and verify the OAuth state before exchanging a code.
 2. Verify the account or channel returned by the provider against the intended account before replacing the active token. Reject unexpected accounts.
-3. Require a persistent, high-entropy `FLASK_SECRET_KEY` in production. The current random fallback in `app/__init__.py` invalidates in-progress sessions on restart or across workers.
+3. Require a persistent, high-entropy `FLASK_SECRET_KEY` in production. At audit time, the random fallback in `app/__init__.py` invalidated in-progress sessions on restart or across workers; production startup now rejects a missing key.
 4. Write tokens atomically to files outside the public static directory, with restrictive permissions. Keep a known-good token until the new account is verified.
 
 **Done when:** An unauthenticated visitor cannot initiate account linking; a callback from another browser or an unexpected account cannot replace either active token; OAuth still works after a normal application restart.
@@ -122,4 +135,4 @@ Python packages are unpinned, while FFmpeg, `yt-dlp`, and the face model are ext
 3. Add clip validation and make pipeline failures stop publication.
 4. Fix gallery and crop behavior, then strengthen tests and deployment setup.
 
-The scripts under `hermes-skill/scripts/` currently mirror the root and `scripts/` versions. Apply each script fix to both copies, or remove the duplication and have the skill invoke a single maintained implementation.
+The original audit treated `hermes-skill/scripts/` as duplicate implementations. They are now forwarding shims; root modules and `scripts/` are canonical. Update a shim only if its forwarding behavior changes. See [TECHNICAL_REMEDIATION.md](TECHNICAL_REMEDIATION.md) for the current layout.

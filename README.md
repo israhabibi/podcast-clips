@@ -39,7 +39,7 @@ podcast-clips/
 5. **Cut** — Face-track 9:16 + subtitle burn-in ke `/tmp/podcast-clips/<episode-id>/clips/`
 6. **Caption** — LLM generate caption + search berita terkait di folder episode
 7. **Deploy** — Copy ke Flask static + restart
-8. **Upload** — YouTube Shorts & TikTok inbox
+8. **Upload** — YouTube Shorts & TikTok inbox; video kompilasi TOP 5 bisa diteruskan ke Meta Threads
 
 ## Yang Bekerja
 
@@ -93,7 +93,18 @@ systemctl --user enable --now flask-app
 systemctl --user status flask-app --no-pager
 ```
 
-Gunicorn listens on `127.0.0.1:5000`; keep the existing HTTPS reverse proxy/tunnel in front of it. Its startup check validates web dependencies before the service starts.
+Gunicorn listens on `127.0.0.1:5000`; keep the existing HTTPS reverse proxy/tunnel in front of it. Its startup check validates web dependencies before the service starts. To enable quota retry processing, install the matching timer; quota failures are queued for a retry after 24 hours, and the timer checks for due items every 30 minutes:
+
+```bash
+cp deploy/youtube-retry.service deploy/youtube-retry.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now youtube-retry.timer
+systemctl --user list-timers youtube-retry.timer
+```
+
+The worker uploads only clips whose release approval still matches the current file SHA-256. Install the timer only after the YouTube token and environment files are configured for the service user.
+
+After inserting a video, the uploader verifies its persisted title, description, category and tags. If verification fails, the admin page shows `metadata_pending` and schedules a repair. Retrying uses the saved video ID, without inserting another video; replacing the media file prevents repair of the previous video's metadata. The CLI returns nonzero while metadata is pending. Default tags contain 15 entries, and titles end in one `#Shorts` within YouTube's 100-character limit.
 
 ### Admin page
 
@@ -107,6 +118,10 @@ python -c 'import secrets; print(secrets.token_urlsafe(48))'
 
 Assign the outputs to `ADMIN_PASSWORD_HASH` and `FLASK_SECRET_KEY`. Keep both private and persistent across restarts. Configure the existing YouTube/TikTok OAuth variables in `.env.example` in the same environment. Copying `.env.example` alone does not load it into the process. Use absolute token-file paths if the web app and upload scripts have different working directories. HTTPS deployments should keep `SESSION_COOKIE_SECURE=true` (the default); for local HTTP testing set it to `false`.
 
+The provided systemd service sets `APP_ENV=production`; Flask refuses to start if `FLASK_SECRET_KEY` is missing. Local development keeps the random-key fallback so the public gallery can be run without production credentials, while admin login remains unavailable until both admin variables are configured.
+
+OAuth account replacement and YouTube publication are fail-closed: `YOUTUBE_EXPECTED_CHANNEL_ID` is set in `.env.example` to the channel ID for [@inhabibi-my-id](https://www.youtube.com/@inhabibi-my-id) (`UCuqm8syvmu1DOqkwzy9usZA`). Copy/configure it in `app/.env` before reconnecting YouTube or uploading; the uploader checks the token's current channel before inserting or repairing video metadata. Set `TIKTOK_EXPECTED_OPEN_ID` to the intended TikTok account before reconnecting TikTok. Callbacks verify returned identities and leave existing token files untouched on mismatch. These are public account identifiers, not credentials; never put access tokens in these variables.
+
 For a shell session, export the values before starting the app (keep the hash in single quotes because it contains `$` characters):
 
 ```bash
@@ -115,7 +130,31 @@ export FLASK_SECRET_KEY='paste-generated-secret-here'
 python app/run.py
 ```
 
-Open `/admin`, sign in, and use the account buttons to start OAuth. The old `/auth` and `/tiktok-auth` URLs now require the same admin session. Pasting a YouTube URL fetches its public title and tries to identify the podcast from the title or the known Tempo playlist feeds; if it cannot identify the show, select it manually. Submitted links are validated, normalized, and saved to `app/data/admin.sqlite3` by default; this database is ignored by Git. A submission is a **pending queue item**. It does not start transcription, clipping, or publishing automatically unless you choose “Proses sekarang”.
+Open `/admin`, sign in, and use the account buttons to start OAuth. The old `/auth` and `/tiktok-auth` URLs now require the same admin session. Pasting a YouTube URL fetches its public title and tries to identify the podcast from the title or the known Tempo playlist feeds; if it cannot identify the show, select it manually. Submitted links are validated, normalized, and saved to `app/data/admin.sqlite3` by default; this database is ignored by Git. A submission is a **pending queue item**. It does not start transcription, clipping, or publishing automatically unless you choose “Proses sekarang”. Pending and failed submissions expose a retry action in the queue; retries reuse and atomically claim the existing database row.
+
+Each failed or pending source card shows its retry/process button even while Details is collapsed. Opening Details reveals the submission and saved error; failed jobs show unavailable progress instead of 100% completion.
+
+### Auto-post video TOP 5 ke Meta Threads
+
+Setelah video kompilasi TOP 5 disetujui untuk rilis dan upload beserta metadata YouTube berhasil, aplikasi mengantrekan **video yang sama + caption** ke Threads. Klip biasa tidak ikut. Antrean dan status Threads tersimpan di SQLite, terpisah dari keberhasilan upload YouTube. Admin → Beranda menyediakan pengaturan auto-post; panel TOP 5 menampilkan status, tombol retry, dan tautan posting jika tersedia. Mengaktifkan akun tidak otomatis memosting ulang video lama; untuk TOP 5 yang sudah diupload, gunakan tombol posting di panelnya.
+
+Integrasi mengikuti mode user token yang sudah dipakai `/home/isra/techbro/techbro-pipeline`. Untuk memakai akun yang sama, set `THREADS_ENV_FILE=/home/isra/techbro/techbro-pipeline/.env` pada environment **Flask, youtube-retry, dan threads-post**. Loader hanya membaca `THREADS_ACCESS_TOKEN`, `THREADS_USER_ID`, dan `THREADS_APP_ID`; konfigurasi pipeline lain tidak diimpor. Token tidak disalin dan file referensi tidak diubah. Pembaruan token tetap dilakukan oleh techbro; worker membaca token terbaru setiap memproses antrean. Alternatifnya, set `THREADS_ACCESS_TOKEN` dan `THREADS_USER_ID` langsung di environment layanan ini. Sebelum posting, aplikasi memeriksa bahwa token memang milik ID akun yang dikonfigurasi.
+
+Template `deploy/threads-shared-account.conf` bisa dipasang sebagai drop-in `~/.config/systemd/user/<nama-layanan>.service.d/30-podcast-threads-techbro.conf` untuk ketiga layanan tersebut. Setelah `systemctl --user daemon-reload`, restart `flask-app` agar proses web membaca environment baru. Ini tidak memerlukan perubahan `app/.env`.
+
+Untuk akun lain melalui OAuth, konfigurasi `THREADS_APP_ID`, `THREADS_APP_SECRET`, dan `THREADS_REDIRECT`, lalu hubungkan akun dari Beranda. App Meta harus memiliki use case Threads dan izin `threads_basic,threads_content_publish`. Token OAuth disimpan privat di `THREADS_TOKEN_FILE`; token mode environment lebih diutamakan bila dikonfigurasi.
+
+Meta mengambil MP4 dari URL HTTPS publik di `THREADS_PUBLIC_BASE_URL` (default `https://clips.gcp.my.id`), sehingga video perlu sudah dideploy ke `app/static/clips`. Pembuatan container dan publish mengikuti [Threads API resmi Meta](https://www.postman.com/meta/threads/request/mev9xf8/1-3-create-video-container). Install worker timer sesudah environment layanan dikonfigurasi:
+
+```bash
+cp deploy/threads-post.service deploy/threads-post.timer ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now threads-post.timer
+```
+
+Worker dijalankan segera setelah enqueue dan timer memeriksa antrean setiap menit. Jika respons publish hilang, status menjadi `needs_review`: tombol **Cek status Threads** hanya memeriksa container sebelumnya, tanpa mengirim publish lagi. Periksa profil Threads bila status tetap belum terkonfirmasi. Container yang sudah `PUBLISHED` atau post ID yang sudah tersimpan tidak diposting ulang.
+
+### Antrean episode
 
 The existing pipeline agent can read and update the queue with:
 
@@ -182,7 +221,7 @@ cp .env.example app/.env
 
 ## Branch Protection
 
-Push langsung ke `main` diblokir oleh pre-push hook lokal. Gunakan Pull Request workflow:
+Gunakan Pull Request workflow:
 
 ```bash
 # 1. Buat branch baru
@@ -203,8 +242,7 @@ git push origin fix/nama-perbaikan
 # 5. Merge via GitHub UI setelah review
 ```
 
-Untuk proteksi tambahan di sisi server, aktifkan Branch Protection Rules di:
-**GitHub > Repo > Settings > Branches > Add branch protection rule >**
+`hooks/pre-push` adalah bantuan lokal yang harus dipasang manual dan dapat dilewati; clone baru tidak menegakkan kebijakan ini. Proteksi server GitHub belum diverifikasi atau dikonfigurasi oleh repo ini. Pemilik/admin repo perlu membuka **GitHub > Repo > Settings > Branches > Add branch protection rule** dan menetapkan:
 - Branch: `main`
 - ✅ Require pull request before merging
 - ✅ Dismiss stale pull request approvals

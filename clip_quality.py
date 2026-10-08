@@ -2,9 +2,17 @@
 
 import math
 import re
+import shutil
+import subprocess
+import json
 
 
 def _number(value, label):
+    if isinstance(value, str):
+        try:
+            value = float(value)
+        except ValueError:
+            pass
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
         raise ValueError(f"{label} must be a finite number.")
     return float(value)
@@ -24,6 +32,58 @@ def _validated_segments(segments):
             raise ValueError(f"Transcript segment {index} has invalid or unordered timing.")
         validated.append({"start": start, "end": end, "text": segment["text"].strip()})
         previous_start = start
+    return validated
+
+
+def probe_source_duration(source_path):
+    """Return a trustworthy video duration or raise before rendering starts."""
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        raise ValueError("ffprobe is required to validate clip ranges against the source video.")
+    try:
+        result = subprocess.run(
+            [ffprobe, "-v", "error", "-show_entries", "format=duration", "-of", "json", str(source_path)],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode != 0:
+            raise ValueError(result.stderr[-300:] or "ffprobe could not read the source video.")
+        duration = _number(json.loads(result.stdout).get("format", {}).get("duration"), "Source duration")
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError) as exc:
+        raise ValueError(f"Could not read source video duration: {exc}") from exc
+    if duration <= 0:
+        raise ValueError("Source video duration must be positive.")
+    return duration
+
+
+def validate_clip_ranges(clips, segments, source_duration, *, min_duration=35, max_duration=75):
+    """Validate renderer inputs without changing the requested time ranges."""
+    transcript = _validated_segments(segments)
+    source_duration = _number(source_duration, "Source duration")
+    if source_duration <= 0:
+        raise ValueError("Source video duration must be positive.")
+    if not isinstance(clips, list) or not clips:
+        raise ValueError("clips.json must contain at least one clip.")
+
+    validated = []
+    for index, clip in enumerate(clips, 1):
+        if not isinstance(clip, dict):
+            raise ValueError(f"Clip {index} must be a JSON object.")
+        start = _number(clip.get("start"), f"Clip {index} start")
+        end = _number(clip.get("end"), f"Clip {index} end")
+        title = clip.get("title")
+        if not isinstance(title, str) or not title.strip():
+            raise ValueError(f"Clip {index} needs a nonempty title.")
+        if start < 0 or end <= start:
+            raise ValueError(f"Clip {index} has invalid range {start}-{end}.")
+        duration = end - start
+        if not min_duration <= duration <= max_duration:
+            raise ValueError(f"Clip {index} duration must be {min_duration}-{max_duration} seconds.")
+        if end > source_duration:
+            raise ValueError(f"Clip {index} end {end:.2f}s exceeds source duration {source_duration:.2f}s.")
+        covered = [segment for segment in transcript if segment["end"] > start and segment["start"] < end]
+        if not covered or covered[0]["start"] > start + 2 or covered[-1]["end"] < end - 2:
+            raise ValueError(f"Clip {index} is not covered by transcript segments.")
+        validated.append({**clip, "start": start, "end": end, "title": title.strip()})
     return validated
 
 

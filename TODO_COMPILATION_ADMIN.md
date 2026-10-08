@@ -1,8 +1,8 @@
-# TODO: Fitur Kompilasi TOP 5 di Admin UI
+# Historical implementation brief: TOP 5 compilation admin UI
 
-> Planning doc — fase build/preview Admin sudah mulai diimplementasikan; upload dan suggestions LLM masih terbuka. Dibuat 2026-09-30. Agen berikutnya yang melanjutkan harus baca file ini + skill `podcast-clipping` (section "Compilation Shorts") dulu.
+> **Historical design checklist (2026-09-30; not a list of unimplemented work).** Current status and the only open operational checks are recorded below. Treat the numbered proposals and old acceptance criteria below as design history where they conflict with current behavior.
 
-**Progress (2026-10-01):** `top5_compilation.py` sekarang menerima `--config` tanpa memutus mode manual lama. Admin sudah memiliki discovery workspace, endpoint transcript candidates, background build, status polling, dan preview route. Belum ada upload YouTube, quota queue, atau suggestions otomatis LLM.
+**Status audit (2026-10-07):** The selection/build/preview/deploy/upload flow, digest-bound release approval, and SQLite quota queue are implemented. The worker and 30-minute systemd timer templates are present. Code and mocked tests cover the behavior. Remaining: install and exercise the timer; inspect final metadata on a real upload. No video was published during verification.
 
 ## Konteks
 
@@ -10,9 +10,9 @@ Pipeline sudah punya builder kompilasi TOP 5 yang working & user-approved:
 
 - **Script**: `scripts/top5_compilation.py` (committed, `755a423`). Template: persistent header 2-line kuning ("TOP 5 MOMEN / <PODCAST>") + sub-header merah, list 1–5 di kiri dengan item aktif di-highlight kuning 38px, subtitle ASS per segmen, white flash + whoosh SFX tiap transisi, ding di pembuka. Input: edit blok `ITEMS`/`HEADER_L1`/`HEADER_L2`/`SUBHEADER`/`SEGS` di file, lalu `python top5_compilation.py <workdir> <out.mp4>`. Workdir harus punya `transcript.json` + `source.mp4`.
 - **Contoh hasil live**: https://youtube.com/watch?v=1l2J04H5Qeo ("TOP 5 Momen Bocor Alus Politik - Prabowo vs Gibran #Shorts")
-- **Masalah**: builder hanya bisa dijalankan manual via shell oleh Hermes. User mau bisa pakai dari admin UI (clips.gcp.my.id/admin).
+- **Masalah pada saat brief ditulis (sudah ditangani)**: builder hanya bisa dijalankan manual via shell oleh Hermes; admin UI now provides the compilation workflow described in the status audit above.
 
-## Yang harus dibangun
+## Original backend proposal (implemented; retained as design history)
 
 ### 1. Backend routes (app/routes/admin.py)
 
@@ -37,7 +37,7 @@ Pipeline sudah punya builder kompilasi TOP 5 yang working & user-approved:
 ## Pitfalls yang wajib dipegang (dari sesi 2026-09-30)
 
 - `youtube_upload.py` auto-append `#Shorts` — jangan sertakan di judul form, nanti dobel `#Shorts #Shorts`.
-- Upload yang terputus bisa meninggalkan video duplikat — sebelum upload ulang, cek `search().list(forMine=True, order='date')` dan hapus dup.
+- **Current behavior:** an ambiguous interrupted upload must be reconciled against the channel and persisted upload records before any new insert. Do not delete a video or blindly retry an ambiguous upload.
 - `videos().update()` via googleapiclient **diam-diam buang tags** (200 OK tapi tags None). Pakai raw REST: refresh token manual, `requests.put('https://www.googleapis.com/youtube/v3/videos?part=snippet', json=body)` — tags baru nempel. Satu update harus sekalian title+description+categoryId+tags.
 - Font header 52px di lebar 720 crop karakter ujung — pakai ukuran yang sudah di script.
 - Timestamp momen: pad start ~0.5–1 detik lebih awal biar setup punchline nggak kepotong.
@@ -55,7 +55,7 @@ Pipeline sudah punya builder kompilasi TOP 5 yang working & user-approved:
 
 # TAMBAHAN (1 Okt 2026): Tombol Upload YouTube per-clip di Admin UI
 
-Fitur kedua yang harus dibangun agen berikutnya, satu paket dengan form kompilasi di atas (sama-sama butuh route upload + handle kuota).
+Fitur kedua requested in the original plan, one package with the compilation form (same upload route and quota-handling concerns).
 
 ## Konteks
 
@@ -63,19 +63,19 @@ Fitur kedua yang harus dibangun agen berikutnya, satu paket dengan form kompilas
 - Kuota channel: `uploadLimitExceeded` muncul pada ~5 video/24 jam (channel muda; naik seiring waktu). HARUS di-handle di UI, bukan cuma error mentah.
 - 10 clip episode Manuver UU Pemilu (2026-10-01) belum masuk YouTube karena limit ini — jadi tombol upload + antrian retry itu langsung kepake.
 
-## Yang harus dibangun
+## Original per-clip upload proposal (implemented; retained as design history)
 
 ### 1. Route: `POST /admin/clips/<episode>/<clip_num>/upload`
 - Import `upload_clip()` dari `scripts/youtube_upload.py` langsung (jangan subprocess).
 - Source of truth untuk title/caption: `captions.json` di folder episode (deploy dir `app/static/clips/<podcast>/<episode>/` ATAU workdir `/tmp/podcast-clips/<id>/`). Judul dari `captions.json[num]['title']`, caption dari `['caption'].strip()` (strip leading newline — caption.py prefix `\n\n`).
 - `#Shorts` di-append otomatis oleh upload_clip — JANGAN ditambahkan di UI.
 - Setelah upload sukses: update deskripsi + tags via **raw REST** (googleapiclient `videos().update` diam-diam buang tags — lihat pitfall di bawah). Tags default 15 sesuai skill section "Searchable metadata".
-- Catat ke `youtube_submissions` (tabel sudah ada di `app/data/admin.sqlite3`).
+- **Historical proposal superseded:** the implementation records per-clip history in `youtube_uploads`; admin submission state is stored separately.
 
 ### 2. Handle kuota `uploadLimitExceeded`
 - Bila ResumableUploadError 400 `uploadLimitExceeded`: JANGAN retry otomatis bareng. Tampilkan status "Kuota harian habis — retry besok" di UI + opsi "Jadwalkan retry" yang menulis ke tabel antrian sederhana (bisa table baru `upload_queue` di sqlite yang sama: episode, clip_num, status queued/failed/done, retry_at).
-- Sebuah langkah kecil (bisa cron job user-side atau tombol "Proses antrian" di UI) memproses antrian saat kuota reset.
-- Sebelum retry, cek dulu apakah clip sudah terlanjur masuk (upload terputus bisa meninggalkan video live): `search().list(forMine=True, order='date')` dan hapus duplikat sebelum upload ulang.
+- **Current behavior:** `scripts/process_youtube_queue.py` processes due rows; deploy `deploy/youtube-retry.service` and `deploy/youtube-retry.timer` to schedule it.
+- **Current behavior:** retries require a persisted video ID or a reconciled non-ambiguous state; never delete a potentially valid upload to make retry proceed.
 
 ### 3. Frontend
 - Di halaman episode admin, tiap clip card dapat tombol "Upload ke YouTube" + status badge (belum / queued / uploaded <video_id> / failed <reason>).
@@ -85,7 +85,7 @@ Fitur kedua yang harus dibangun agen berikutnya, satu paket dengan form kompilas
 ## Pitfalls tambahan (semua sudah kejadian nyata, Oct 2026)
 
 - `videos().update()` via googleapiclient mengembalikan 200 TAPI tags jadi None. Solusi terverifikasi: refresh token manual → `requests.put('https://www.googleapis.com/youtube/v3/videos?part=snippet', json=body)` dengan title+description+categoryId+tags sekaligus.
-- Upload yang terputus (network / restart) bisa meninggalkan video duplikat di channel. Sebelum retry apapun, cek `search().list(forMine=True, order='date', maxResults=10)` dan hapus video dengan judul identik.
+- **Current behavior:** reconcile interrupted uploads using persisted IDs and the manifest; ambiguous `uploading` states need operator investigation before retry. Never delete videos based only on matching titles.
 - Kuota upload ≠ kuota API. Kuota API (10.000 unit/hari) hampir mustahil habis untuk upload <100 video. Yang habis itu upload limit per-channel (~5/hari untuk channel muda).
 - `#Shorts` dobel terjadi 2x — upload_clip sudah auto-append, UI tidak boleh menambah lagi.
 
@@ -93,4 +93,4 @@ Fitur kedua yang harus dibangun agen berikutnya, satu paket dengan form kompilas
 
 5. Upload satu clip dari UI → video live dengan judul benar (tanpa #Shorts dobel), description berisi caption + 3 link, tags ≥10 terverifikasi.
 6. Saat kena uploadLimitExceeded → status jelas di UI, clip masuk antrian, tidak ada retry spam.
-7. Riwayat upload (video_id, timestamp) tercatat di youtube_submissions.
+7. Riwayat upload (video_id, timestamp) tercatat di `youtube_uploads`, the current per-clip upload table.

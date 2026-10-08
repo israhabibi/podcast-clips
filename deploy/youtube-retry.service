@@ -1,0 +1,12 @@
+[Unit]
+Description=Process due Podcast Clips YouTube quota retries
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/isra/podcast-clips
+EnvironmentFile=/home/isra/podcast-clips/app/.env
+EnvironmentFile=/home/isra/.hermes/.env
+Environment="PATH=/home/isra/podcast-clips/.venv/bin"
+ExecStart=/home/isra/podcast-clips/.venv/bin/python /home/isra/podcast-clips/scripts/process_youtube_queue.py 20

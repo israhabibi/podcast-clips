@@ -1031,6 +1031,9 @@
         .sub-group-items {
             padding: 8px 0 6px;
         }
+        .sg-progress-wrap progress[hidden], .job-progress progress[hidden] {
+            display: none;
+        }
         .sub-item {
             display: grid;
             grid-template-columns: 1fr 280px;
@@ -1206,7 +1209,7 @@
                     <div class="card-header">
                         <div>
                             <h2>Koneksi akun upload</h2>
-                            <p class="subtitle">Hubungkan channel YouTube dan akun TikTok untuk mengunggah langsung dari panel admin.</p>
+                            <p class="subtitle">Hubungkan akun upload. Threads menerima video kompilasi TOP 5 secara otomatis setelah upload YouTube berhasil.</p>
                         </div>
                         <span class="card-badge">OAuth</span>
                     </div>
@@ -1258,6 +1261,32 @@
                                     <small>⚠ Set YOUTUBE_CLIENT_ID dan YOUTUBE_CLIENT_SECRET di env sebelum bisa hubungkan.</small>
                                 {% endif %}
                             </div>
+                        </div>
+
+                        <div class="account-card" data-provider="threads">
+                            <div class="account-head">
+                                <div class="provider">
+                                    <div class="provider-name"><span class="provider-icon">@</span>Meta Threads</div>
+                                    <p class="provider-desc">Video TOP 5 + caption otomatis. Klip biasa tidak ikut diposting.</p>
+                                </div>
+                                <span class="chip {{ 'chip-success' if threads_account.connected else 'chip-neutral' }}">
+                                    {{ ('User ID · ' ~ threads_account.user_id if threads_account.shared else '@' ~ threads_account.username) if threads_account.connected else 'Hubungkan ulang' if threads_account.expired else 'Belum terhubung' }}
+                                </span>
+                            </div>
+                            <div class="account-foot">
+                                {% if threads_account.connected and threads_account.shared %}
+                                    <small>Memakai akun Threads dari konfigurasi yang sudah ada. Identitas akun diperiksa sebelum posting.</small>
+                                {% elif threads_ready %}
+                                    <a class="btn btn-primary" href="{{ url_for('threads_auth') }}">{{ 'Hubungkan ulang Threads' if threads_account.connected or threads_account.expired else 'Hubungkan Threads' }}</a>
+                                {% else %}
+                                    <small>Gunakan konfigurasi user token Threads yang sudah ada, atau konfigurasi Threads App ID dan App Secret untuk OAuth.</small>
+                                {% endif %}
+                            </div>
+                            <form method="post" action="{{ url_for('threads_settings') }}" style="margin-top:12px">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                <label><input type="checkbox" name="auto_post" value="1" {% if threads_auto_post %}checked{% endif %}> Auto-post video TOP 5 setelah upload YouTube berhasil</label>
+                                <button type="submit" class="btn btn-secondary" style="margin-top:8px">Simpan</button>
+                            </form>
                         </div>
 
                         <div class="account-card" data-provider="tiktok">
@@ -1408,6 +1437,7 @@
                                     <td>
                                         <span class="clip-title">{{ clip.clip_num }}. {{ clip.title }}</span>
                                         <span class="clip-meta">{{ clip.manual.size_mb if clip.manual else '?' }} MB · durasi {{ clip.manual.start if clip.manual else '?' }}s</span>
+                                        {% if clip.manual %}<a class="clip-meta" href="{{ url_for('serve_clip', podcast=clip.podcast, episode=clip.episode, filename=clip.manual.video_filename) }}" target="_blank" rel="noopener noreferrer">▶ Tinjau klip</a>{% endif %}
                                     </td>
                                     <td>
                                         <div class="status-stack">
@@ -1421,6 +1451,8 @@
                                                     <span class="chip chip-danger">Gagal</span>
                                                 {% elif s == 'quota' %}
                                                     <span class="chip chip-danger">Kuota habis</span>
+                                                {% elif s == 'metadata_pending' %}
+                                                    <span class="chip chip-warning">Metadata perlu dicoba lagi</span>
                                                 {% elif s == 'uploading' %}
                                                     <span class="chip chip-warning">Sedang upload</span>
                                                 {% elif s == 'queued' %}
@@ -1441,6 +1473,9 @@
                                             {% else %}
                                                 <span class="chip chip-neutral">Belum di-upload</span>
                                             {% endif %}
+                                            {% if clip.retry and clip.retry.status == 'queued' %}
+                                                <span class="chip chip-warning" title="Retry dijadwalkan {{ clip.retry.retry_at }} UTC">⏰ Retry {{ clip.retry.retry_at[:16].replace('T', ' ') }} UTC</span>
+                                            {% endif %}
                                         </div>
                                     </td>
                                     <td>
@@ -1448,9 +1483,10 @@
                                             <div class="action-group">
                                                 <form method="post" action="{{ url_for('admin_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}">
                                                     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                                    <label style="display:block;max-width:190px;font-size:.72rem;color:var(--text-muted);margin:0 0 6px"><input type="checkbox" name="release_approved" value="1" required> Saya sudah meninjau klip dan menyetujui publikasinya.</label>
                                                     <button class="btn btn-primary" type="submit"
                                                             {% if clip.upload and clip.upload.status == 'uploading' %}disabled title="Upload sedang berjalan"{% endif %}>
-                                                        {{ '⏳ Sedang upload' if clip.upload and clip.upload.status == 'uploading' else '⬆ Upload API' }}
+                                                        {{ '⏳ Sedang upload' if clip.upload and clip.upload.status == 'uploading' else '↻ Coba metadata lagi' if clip.upload and clip.upload.video_id else '⬆ Upload API' }}
                                                     </button>
                                                 </form>
                                                 <button class="btn btn-secondary" type="button"
@@ -1497,6 +1533,7 @@
                                                     </div>
                                                 </div>
 
+                                                {% if clip.release_approved %}
                                                 <div class="panel-subcard">
                                                     <h4>Metadata untuk YouTube Studio</h4>
                                                     <div style="margin-top:4px">
@@ -1541,8 +1578,20 @@
                                                         </div>
                                                     </form>
                                                 </div>
+                                                {% else %}
+                                                <div class="panel-subcard" style="border-color:rgba(234,179,8,.35);background:rgba(234,179,8,.06)">
+                                                    <h4 style="color:#fcd34d">Review wajib sebelum Studio</h4>
+                                                    <p class="subtitle">Tinjau preview klip dan metadata di file pendamping. Setujui hash file di bawah sebelum metadata dan tautan YouTube Studio dibuka.</p>
+                                                    <form method="post" action="{{ url_for('admin_approve_manual_upload_clip', podcast=clip.podcast, episode=clip.episode, clip_num=clip.clip_num) }}">
+                                                        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                                        <label style="display:block;font-size:.78rem;color:var(--text-muted);margin:0 0 10px"><input type="checkbox" name="release_approved" value="1" required> Saya sudah meninjau klip ini dan menyetujui publikasinya.</label>
+                                                        <button class="btn btn-primary" type="submit">Setujui rilis ke Studio</button>
+                                                    </form>
+                                                </div>
+                                                {% endif %}
                                             </div>
                                             <div class="manual-col">
+                                                {% if clip.release_approved %}
                                                 <div class="panel-subcard" style="background: linear-gradient(180deg, rgba(245,158,11,.06), rgba(0,0,0,.2));">
                                                     <h4 style="color:#ffcc66">📌 Panduan Studio 6 langkah</h4>
                                                     <ol class="studio-steps">
@@ -1554,6 +1603,9 @@
                                                         <li>Sistem otomatis menulis file <code>{{ clip.manual.video_filename }}.metadata.json</code> pendamping di samping MP4 sebagai arsip record.</li>
                                                     </ol>
                                                 </div>
+                                                {% else %}
+                                                <div class="panel-subcard"><h4>Studio terkunci</h4><p class="subtitle">Setujui rilis setelah meninjau klip untuk membuka panduan dan tautan upload manual.</p></div>
+                                                {% endif %}
                                                 <div class="panel-subcard">
                                                     <h4>Catatan upload API vs Manual</h4>
                                                     <div class="info-line">
@@ -1566,7 +1618,7 @@
                                                     </div>
                                                     <div class="info-line">
                                                         <span class="info-label">Re-upload</span>
-                                                        <span class="info-value">Hapus record di <code>app/data/admin.sqlite3</code> tabel <code>youtube_uploads</code> kalau ingin bikin record ulang.</span>
+                                                        <span class="info-value">Jika metadata gagal, coba lagi untuk video yang sama. Video ID yang sudah tersimpan akan dipakai kembali.</span>
                                                     </div>
                                                 </div>
                                             </div>
@@ -1669,9 +1721,12 @@
                                 </div>
                                 <div id="compilation-chips" style="display:flex;gap:8px;flex-wrap:wrap"></div>
                             </div>
+                            <label style="display:block;margin:10px 0;color:var(--text-muted);font-size:.82rem"><input type="checkbox" id="compilation-release-confirm"> Saya sudah meninjau preview Top 5 ini dan menyetujui publikasinya.</label>
                             <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
                                 <button type="button" id="btn-compilation-deploy" class="btn btn-secondary" style="padding:10px 18px;font-size:.9rem">📦 Deploy ke static/clips (permanen)</button>
                                 <button type="button" id="btn-compilation-upload" class="btn btn-primary" style="padding:10px 18px;font-size:.9rem;background:linear-gradient(135deg,#ff0000,#cc0000)">🚀 Upload ke YouTube Shorts</button>
+                                <button type="button" id="btn-compilation-threads" class="btn btn-secondary" hidden>↻ Coba posting Threads</button>
+                                <a id="compilation-threads-link" class="btn btn-secondary" target="_blank" rel="noopener noreferrer" style="display:none">Buka Threads ↗</a>
                                 <a id="compilation-deployed-link" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="padding:8px 14px;display:none">⬇ Download versi permanen</a>
                                 <a id="compilation-yt-link" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" style="padding:8px 14px;display:none">▶ Buka di YouTube ↗</a>
                             </div>
@@ -1779,10 +1834,11 @@
                                 <div class="sg-progress-wrap">
                                     <div class="sg-stage">
                                         <span>{{ group.worst_progress.stage or group.group_status_label }}</span>
-                                        <small>{{ group.max_percent }}%</small>
+                                        <small>{{ (group.max_percent|string ~ '%') if group.worst_progress.get('percent_known', true) else 'Progress tidak tersedia' }}</small>
                                     </div>
                                     <progress value="{{ group.max_percent }}" max="100"
-                                              aria-label="Progress {{ group.video_id }}">{{ group.max_percent }}%</progress>
+                                              aria-label="Progress {{ group.video_id }}"
+                                              {% if not group.worst_progress.get('percent_known', true) %}hidden{% endif %}>{{ group.max_percent }}%</progress>
                                     <small class="job-label" style="margin:2px 0 0;color:var(--text-muted)">
                                         {{ group.worst_progress.label or group.group_status_label }}
                                     </small>
@@ -1810,6 +1866,12 @@
                                     </div>
                                     <span class="chip {{ group.group_status_class }}">{{ group.group_status_label }}</span>
                                     <div style="display:flex;gap:6px;justify-content:flex-end;flex-wrap:wrap">
+                                        {% if group.worst_status in ('failed', 'pending') %}
+                                        <form method="post" action="{{ url_for('admin_retry_youtube_link', video_id=group.video_id) }}">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+                                            <button type="submit" class="btn btn-secondary">{{ '↻ Coba proses lagi' if group.worst_status == 'failed' else '▶ Proses item ini' }}</button>
+                                        </form>
+                                        {% endif %}
                                         <button type="button" class="btn btn-ghost sg-toggle" data-group-toggle-source-video
                                                 aria-expanded="false" aria-controls="src-wrap-{{ group.video_id }}">
                                             ▶ Putar sumber
@@ -1866,7 +1928,8 @@
                                         <span class="job-stage">{{ item.progress.stage }}</span>
                                         <span class="job-label">{{ item.progress.label }}</span>
                                         <progress max="100" value="{{ item.progress.percent }}"
-                                                  aria-label="Progress {{ item.progress.stage }}">{{ item.progress.percent }}%</progress>
+                                                  aria-label="Progress {{ item.progress.stage }}"
+                                                  {% if not item.progress.get('percent_known', true) %}hidden{% endif %}>{{ item.progress.percent }}%</progress>
                                     </div>
                                 </div>
                                 {% endfor %}
@@ -1963,6 +2026,7 @@
                 const expanded = itemsBtn.getAttribute("aria-expanded") !== "true";
                 itemsBtn.setAttribute("aria-expanded", String(expanded));
                 target.setAttribute("aria-hidden", String(!expanded));
+                target.toggleAttribute("hidden", !expanded);
                 group.setAttribute("aria-expanded", String(expanded));
                 itemsBtn.textContent = expanded ? "▲ Sembunyikan" : "⋮ Detail";
                 return;
@@ -2015,7 +2079,7 @@
                         const prog  = node.querySelector("progress");
                         if (stage) stage.textContent = job.stage || "";
                         if (label) label.textContent = job.label || "";
-                        if (prog)  { prog.value = job.percent; prog.setAttribute("aria-label", job.stage || ""); }
+                        if (prog)  { prog.value = job.percent; prog.hidden = job.percent_known === false; prog.setAttribute("aria-label", job.stage || ""); }
                     });
                     // Legacy flat rows (if older templates rendered)
                     const row = document.querySelector(`tr[data-video-id="${CSS.escape(vid)}"]`);
@@ -2025,7 +2089,7 @@
                         const p = row.querySelector("progress");
                         if (s) s.textContent = job.stage || "";
                         if (l) l.textContent = job.label || "";
-                        if (p) { p.value = job.percent; p.setAttribute("aria-label", job.stage || ""); }
+                        if (p) { p.value = job.percent; p.hidden = job.percent_known === false; p.setAttribute("aria-label", job.stage || ""); }
                     }
                 }
                 // Group-level aggregate updates
@@ -2041,8 +2105,8 @@
                         const prog = progWrap.querySelector("progress");
                         const labelSmall = progWrap.querySelector(".job-label");
                         if (stageSpan) stageSpan.textContent = g.stage || g.group_status_label || "";
-                        if (percentSmall) percentSmall.textContent = `${g.percent}%`;
-                        if (prog) prog.value = g.percent;
+                        if (percentSmall) percentSmall.textContent = g.percent_known === false ? "Progress tidak tersedia" : `${g.percent}%`;
+                        if (prog) { prog.value = g.percent; prog.hidden = g.percent_known === false; }
                         if (labelSmall) labelSmall.textContent = g.label || g.group_status_label || "";
                     }
                     // Chip status update
@@ -2122,6 +2186,9 @@
         const compilationDeployStatus = document.querySelector("#compilation-deploy-status");
         const btnCompilationDeploy = document.querySelector("#btn-compilation-deploy");
         const btnCompilationUpload = document.querySelector("#btn-compilation-upload");
+        const btnCompilationThreads = document.querySelector("#btn-compilation-threads");
+        const compilationThreadsLink = document.querySelector("#compilation-threads-link");
+        const compilationReleaseConfirm = document.querySelector("#compilation-release-confirm");
         const compilationDeployedLink = document.querySelector("#compilation-deployed-link");
         const compilationYtLink = document.querySelector("#compilation-yt-link");
         let lastCandidates = []; // cache "Usul otomatis" result untuk autofill tanpa hit ulang
@@ -2131,7 +2198,9 @@
             uploading: { cls: "chip-warn", label: "⏳ Sedang meng-upload...", icon: "⏳" },
             manual: { cls: "chip-info", label: "📝 Tercatat upload manual", icon: "📝" },
             quota: { cls: "chip-danger", label: "⚠ Kuota upload habis", icon: "⚠" },
+            queued: { cls: "chip-warn", label: "⏰ Dijadwalkan retry", icon: "⏰" },
             failed: { cls: "chip-danger", label: "❌ Gagal upload", icon: "❌" },
+            metadata_pending: { cls: "chip-warn", label: "Metadata perlu dicoba lagi", icon: "↻" },
         };
 
         function renderCompilationChips(status) {
@@ -2164,10 +2233,38 @@
                         : "font-size:.75rem;padding:3px 10px;border-radius:999px;background:rgba(220,38,38,0.12);color:rgb(185,28,28);border:1px solid rgba(220,38,38,0.35);font-weight:600"
                 );
                 chip.textContent = `${def.icon} ${def.label}${status.upload_video_id ? ` · ${status.upload_video_id}` : ""}`;
-                if (status.upload_error && (status.upload_status === "failed" || status.upload_status === "quota")) {
+                if (status.upload_error && (status.upload_status === "failed" || status.upload_status === "quota" || status.upload_status === "metadata_pending")) {
                     chip.title = status.upload_error;
                 }
                 chips.push(chip);
+            }
+            if (status.retry_status === "queued") {
+                const retryChip = document.createElement("span");
+                retryChip.style.cssText = "font-size:.75rem;padding:3px 10px;border-radius:999px;background:rgba(234,179,8,0.12);color:rgb(161,98,7);border:1px solid rgba(234,179,8,0.35);font-weight:600";
+                retryChip.textContent = `⏰ Retry terjadwal${status.retry_at ? ` · ${new Date(status.retry_at).toLocaleString()}` : ""}`;
+                chips.push(retryChip);
+            }
+            const threadsLabels = {
+                queued: "Threads: antrean video", processing: "Threads: menyiapkan video",
+                publishing: "Threads: memublikasikan", published: "Threads: sudah diposting",
+                failed: "Threads: gagal, coba lagi", needs_review: "Threads: publish belum terkonfirmasi",
+                not_connected: "Threads: hubungkan akun dari Beranda", disabled: "Threads: auto-post nonaktif",
+                not_queued: "Threads: belum masuk antrean"
+            };
+            if (status.threads_status && threadsLabels[status.threads_status]) {
+                const chip = document.createElement("span");
+                chip.className = "chip " + (status.threads_status === "published" ? "chip-success" : "chip-info");
+                chip.textContent = threadsLabels[status.threads_status];
+                if (status.threads_error) chip.title = status.threads_error;
+                chips.push(chip);
+            }
+            if (btnCompilationThreads) {
+                btnCompilationThreads.hidden = status.upload_status !== "uploaded" || !["not_queued", "failed", "needs_review"].includes(status.threads_status);
+                btnCompilationThreads.textContent = status.threads_status === "needs_review" ? "Cek status Threads" : "Posting / coba lagi ke Threads";
+            }
+            if (compilationThreadsLink) {
+                compilationThreadsLink.style.display = status.threads_url ? "" : "none";
+                if (status.threads_url) compilationThreadsLink.href = status.threads_url;
             }
             chips.forEach((c) => compilationChips.appendChild(c));
             // Deployed permanent download link
@@ -2196,10 +2293,15 @@
         }
 
         let compilationStatusCache = { deployed: false, upload_status: null, status: "idle" };
+        let threadsPollTimer = null;
 
         function applyPermaStateFromStatus(s) {
             compilationStatusCache = Object.assign({}, s);
             renderCompilationChips(compilationStatusCache);
+            if (threadsPollTimer) clearTimeout(threadsPollTimer);
+            if (["queued", "processing", "publishing"].includes(s.threads_status)) {
+                threadsPollTimer = setTimeout(probeCompilationStatusNow, 5000);
+            }
         }
 
         // Immediate probe when episode changes: if build already exists (completed previously), show perma actions now
@@ -2210,7 +2312,7 @@
                 if (!r.ok) return null;
                 const s = await r.json();
                 // If completed already, show player + perma actions without needing re-build
-                if (s.status === "completed" && s.preview && compilationPreview) {
+                if (s.status === "completed" && s.preview && compilationPreview && compilationPreview.getAttribute("src")?.split("?")[0] !== s.preview) {
                     const url = `${s.preview}?v=${Date.now()}`;
                     compilationPreview.src = url;
                     compilationPreviewLink.href = url;
@@ -2225,6 +2327,7 @@
         }
 
         function resetCompilationSlots() {
+            if (compilationReleaseConfirm) compilationReleaseConfirm.checked = false;
             compilationItems.innerHTML = "";
             for (let index = 0; index < 5; index += 1) {
                 compilationItems.insertAdjacentHTML("beforeend", `
@@ -2484,6 +2587,7 @@
 
         compilationForm.addEventListener("submit", async (event) => {
             event.preventDefault();
+            if (compilationReleaseConfirm) compilationReleaseConfirm.checked = false;
             const items = [...document.querySelectorAll(".comp-item")].map((it) => ({
                 label: it.querySelector(".compilation-label").value,
                 start: it.querySelector(".compilation-start").value,
@@ -2582,6 +2686,10 @@
                     setStatus(compilationDeployStatus, "Pilih episode dulu.", "warn");
                     return;
                 }
+                if (!compilationReleaseConfirm || !compilationReleaseConfirm.checked) {
+                    setStatus(compilationDeployStatus, "Tinjau preview lalu konfirmasi persetujuan rilis sebelum upload.", "warn");
+                    return;
+                }
                 setStatus(compilationDeployStatus, "Meng-upload ke YouTube Shorts (deploy duluan jika perlu)...", "warn");
                 btnCompilationUpload.disabled = true;
                 try {
@@ -2592,11 +2700,15 @@
                             Accept: "application/json",
                             "X-Requested-With": "XMLHttpRequest",
                         },
-                        body: JSON.stringify({ csrf_token: "{{ csrf_token }}" }),
+                        body: JSON.stringify({ csrf_token: "{{ csrf_token }}", release_confirmed: true }),
                     });
-                    const data = (response.ok || response.status === 409)
-                        ? await response.json().catch(() => ({ error: `HTTP ${response.status}` }))
-                        : { error: (await response.text()).slice(0, 500) || `HTTP ${response.status}` };
+                    const data = await response.json().catch(() => ({ error: `HTTP ${response.status}` }));
+                    if (data.status === "metadata_pending") {
+                        setStatus(compilationDeployStatus,
+                            `Video tersimpan: ${data.url || data.video_id}. Metadata perlu dicoba lagi: ${data.error || data.warning || ""}`, "warn");
+                        probeCompilationStatusNow();
+                        return;
+                    }
                     if (!response.ok && response.status !== 409) throw new Error(data.error || "Upload gagal.");
                     if (data.already_uploaded) {
                         setStatus(compilationDeployStatus,
@@ -2617,6 +2729,25 @@
                 } finally {
                     btnCompilationUpload.disabled = false;
                 }
+            });
+        }
+
+        if (btnCompilationThreads) {
+            btnCompilationThreads.addEventListener("click", async () => {
+                if (!compilationEpisode || !compilationEpisode.value) return;
+                btnCompilationThreads.disabled = true;
+                try {
+                    const response = await fetch(`/admin/compilation/threads/${encodeURIComponent(compilationEpisode.value)}/retry`, {
+                        method: "POST", headers: {"Content-Type": "application/json", Accept: "application/json"},
+                        body: JSON.stringify({csrf_token: "{{ csrf_token }}"})
+                    });
+                    const data = await response.json();
+                    if (!response.ok) throw new Error(data.error || "Antrean Threads gagal.");
+                    setStatus(compilationDeployStatus, "Video TOP 5 masuk antrean Threads.", "ok");
+                    await probeCompilationStatusNow();
+                } catch (error) {
+                    setStatus(compilationDeployStatus, error.message, "err");
+                } finally { btnCompilationThreads.disabled = false; }
             });
         }
 

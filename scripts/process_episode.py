@@ -47,7 +47,7 @@ def main():
         title,
     ]
     try:
-        result = subprocess.run(command, cwd=str(REPO_ROOT), check=False, capture_output=False)
+        result = subprocess.run(command, cwd=str(REPO_ROOT), check=False, capture_output=True, text=True)
     except OSError as exc:
         err = f"Worker start failed: {exc!r}"
         try:
@@ -62,14 +62,21 @@ def main():
         except Exception:  # noqa: BLE001
             pass
         raise SystemExit(1)
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, file=sys.stderr, end="" if result.stderr.endswith("\n") else "\n")
     if result.returncode == 0:
         try:
             set_submission_status(video_id, "ready_for_review")
         except Exception:  # noqa: BLE001
             pass
         return 0
+    details = "\n".join(part.strip()[-2000:] for part in (result.stderr or "", result.stdout or "") if part.strip())
     err = f"run_one_episode.py exited with code {result.returncode}. " \
-          f"Penyebab umum: (1) Download sumber MP4 gagal/403; (2) Faster-whisper OOM/crash; (3) Step curate.py error; (4) Durasi salah satu segment klip diluar batas 40-70 detik setelah boundary alignment."
+          f"Penyebab umum: (1) Download sumber MP4 gagal/403; (2) Faster-whisper OOM/crash; (3) Step curate.py error; (4) Validasi metadata klip gagal."
+    if details:
+        err += f"\nOutput worker (tail):\n{details}"[:4000]
     try:
         set_submission_status(video_id, "failed", err)
     except Exception:  # noqa: BLE001

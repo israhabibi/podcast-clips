@@ -6,6 +6,8 @@ from datetime import timedelta
 
 SECRET_KEY = os.environ.get("FLASK_SECRET_KEY")
 if not SECRET_KEY:
+    if os.environ.get("APP_ENV", "development").lower() in {"production", "prod"}:
+        raise RuntimeError("FLASK_SECRET_KEY must be configured in production.")
     SECRET_KEY = os.urandom(24).hex()
     import sys as _sys
     print("WARNING: FLASK_SECRET_KEY not set. Session keys reset on every restart.", file=_sys.stderr)

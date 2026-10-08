@@ -35,6 +35,12 @@ LOCK_FILE = STATE_DIR / "lock"
 LOCK_TIMEOUT = 30
 
 ALLOWED_STATES = ("discovered", "in_progress", "completed", "failed")
+ALLOWED_TRANSITIONS = {
+    "discovered": {"in_progress"},
+    "in_progress": {"completed", "failed"},
+    "failed": {"in_progress", "discovered"},
+    "completed": set(),
+}
 
 
 def _acquire_lock():
@@ -170,7 +176,7 @@ def discover():
         for entry in feed_entries:
             vid = entry["video_id"]
             existing = state.get(vid)
-            if existing and existing.get("status") in ("completed", "discovered", "in_progress"):
+            if existing and existing.get("status") in ("completed", "in_progress"):
                 continue
             if not existing:
                 record = {
@@ -219,6 +225,10 @@ def _set_status(video_id, status, error=""):
         record = state.get(video_id)
         if record is None:
             print(f"ERROR: video_id {video_id} not in state; run discover first or provide full data via a pipeline.", file=sys.stderr)
+            sys.exit(1)
+        current = record.get("status")
+        if status not in ALLOWED_TRANSITIONS.get(current, set()):
+            print(f"ERROR: invalid lifecycle transition {current} -> {status} for {video_id}", file=sys.stderr)
             sys.exit(1)
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         if status == "in_progress":

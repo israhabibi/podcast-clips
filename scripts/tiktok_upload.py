@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Upload clip to TikTok via Content Posting API v2."""
-import json, os, sys, requests, time
+import hashlib, json, os, sys, requests, time
 from pathlib import Path
+from episode_manifest import write_manifest
 
 REPO_DIR = Path(__file__).resolve().parents[1]
 WORK_DIR_VALUE = os.environ.get("PODCAST_WORK_DIR")
@@ -12,6 +13,51 @@ CAPTIONS_FILE = WORK_DIR / "captions.json" if WORK_DIR else None
 
 API_BASE = "https://open.tiktokapis.com/v2"
 
+
+def _manifest_clip(filename):
+    if WORK_DIR is None:
+        return None
+    try:
+        data = json.loads((WORK_DIR / "episode_manifest.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict) or data.get("status") != "ready_for_review":
+        return None
+    clips = data.get("clips")
+    if not isinstance(clips, list):
+        return None
+    return next((clip for clip in clips if isinstance(clip, dict) and clip.get("filename") == filename), None)
+
+
+def _manifest_matches_file(clip_entry, video_path):
+    if not isinstance(clip_entry, dict) or not isinstance(clip_entry.get("sha256"), str):
+        return False
+    try:
+        digest = hashlib.sha256(Path(video_path).read_bytes()).hexdigest()
+    except OSError:
+        return False
+    return digest == clip_entry["sha256"]
+
+
+def _record_tiktok_state(filename, publish_id, status):
+    if WORK_DIR is None:
+        return False
+    manifest_path = WORK_DIR / "episode_manifest.json"
+    try:
+        data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    for clip_entry in data.get("clips", []):
+        if isinstance(clip_entry, dict) and clip_entry.get("filename") == filename:
+            platform_ids = clip_entry.setdefault("platform_upload_ids", {})
+            platform_ids["tiktok"] = {"publish_id": publish_id, "status": status}
+            try:
+                write_manifest(WORK_DIR, data)
+            except OSError:
+                return False
+            return True
+    return False
+
 def get_token():
     if not os.path.exists(TOKEN_FILE):
         return None, None
@@ -19,6 +65,13 @@ def get_token():
     return data.get("access_token"), data.get("open_id")
 
 def upload_clip(video_path, caption, idx):
+    video_path = Path(video_path)
+    manifest_clip = _manifest_clip(video_path.name)
+    if not _manifest_matches_file(manifest_clip, video_path):
+        return {"error": "Clip is not present in the ready-for-review manifest or has changed."}
+    existing_tiktok = manifest_clip.get("platform_upload_ids", {}).get("tiktok", {})
+    if existing_tiktok.get("publish_id"):
+        return {"error": f"TikTok inbox submission already recorded ({existing_tiktok['publish_id']}, status={existing_tiktok.get('status', 'unknown')}); not resubmitting."}
     token, open_id = get_token()
     if not token:
         return {"error": "Belum OAuth. Buka https://clips.gcp.my.id/tiktok-auth dulu."}
@@ -44,6 +97,8 @@ def upload_clip(video_path, caption, idx):
     publish_id = init_data.get("data", {}).get("publish_id")
     if not upload_url:
         return {"error": f"No upload_url: {init_data}"}
+    if publish_id and not _record_tiktok_state(video_path.name, publish_id, "upload_in_progress"):
+        return {"error": "Could not record TikTok publish ID; stop and reconcile before retrying."}
 
     # 2. Upload file
     upload_headers = {
@@ -77,6 +132,9 @@ def upload_clip(video_path, caption, idx):
     r = requests.post(post_url, json=post_body, headers=headers, timeout=30)
     if r.status_code != 200:
         return {"error": f"Post failed: {r.status_code} {r.text}"}
+
+    if not _record_tiktok_state(video_path.name, publish_id, "inbox"):
+        return {"error": f"TikTok accepted publish ID {publish_id}, but manifest update failed; reconcile before retrying."}
     
     result = r.json()
     return {
@@ -126,6 +184,19 @@ def main(args=None):
         for idx in sorted(caps.keys(), key=int):
             clip_file = CLIPS_DIR / caps[idx]['clip']
             cap_text = caps[idx]['caption'].strip()
+            manifest_clip = _manifest_clip(clip_file.name)
+            if not _manifest_matches_file(manifest_clip, clip_file):
+                failed = True
+                print(f"  ❌ {idx}. Clip not in review manifest or changed after manifest creation")
+                continue
+            tiktok_state = manifest_clip.get("platform_upload_ids", {}).get("tiktok", {})
+            if tiktok_state.get("status") == "inbox":
+                print(f"  ℹ️ {idx}. Already in TikTok inbox: {tiktok_state.get('publish_id')}")
+                continue
+            if tiktok_state.get("publish_id"):
+                failed = True
+                print(f"  ❌ {idx}. Existing TikTok publish ID needs reconciliation: {tiktok_state['publish_id']}")
+                continue
             r = upload_clip(clip_file, cap_text, idx)
             if 'error' in r:
                 failed = True
@@ -139,7 +210,19 @@ def main(args=None):
             print(f"Clip {idx} not found")
             return 1
         cap_text = caps[idx]['caption'].strip()
-        r = upload_clip(CLIPS_DIR / caps[idx]['clip'], cap_text, idx)
+        clip_file = CLIPS_DIR / caps[idx]['clip']
+        manifest_clip = _manifest_clip(clip_file.name)
+        if not _manifest_matches_file(manifest_clip, clip_file):
+            print(f"Clip {idx} is not in the review manifest or has changed")
+            return 1
+        tiktok_state = manifest_clip.get("platform_upload_ids", {}).get("tiktok", {})
+        if tiktok_state.get("status") == "inbox":
+            print(f"Already in TikTok inbox: {tiktok_state.get('publish_id')}")
+            return 0
+        if tiktok_state.get("publish_id"):
+            print(f"Existing TikTok publish ID needs reconciliation: {tiktok_state['publish_id']}")
+            return 1
+        r = upload_clip(clip_file, cap_text, idx)
         if 'error' in r:
             print(f"❌ {r['error']}")
             return 1

@@ -1,0 +1,11 @@
+[Unit]
+Description=Check the Podcast Clips YouTube retry queue every 30 minutes
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=30min
+Persistent=true
+Unit=youtube-retry.service
+
+[Install]
+WantedBy=timers.target

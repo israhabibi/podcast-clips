@@ -2,7 +2,7 @@
 """Kurasi momen terbaik + rangkuman episode + x post dari transkrip podcast via LLM (SumoPod)."""
 import json, sys, os, urllib.request, re
 from pathlib import Path
-from clip_quality import format_timed_transcript, validate_clips
+from clip_quality import format_timed_transcript, probe_source_duration, validate_clips, validate_clip_ranges
 
 KEY = os.environ.get("HERMES_CUSTOM_AI_SUMOPOD_COM_API_KEY", "")
 if not KEY:
@@ -24,6 +24,11 @@ if not WORK_DIR_VALUE:
     sys.exit("PODCAST_WORK_DIR is required, e.g. /tmp/podcast-clips/episode-id")
 WORK_DIR = Path(WORK_DIR_VALUE)
 WORK_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    source_path = Path(os.environ.get("PODCAST_SOURCE_VIDEO", str(WORK_DIR / "source.mp4")))
+    SOURCE_DURATION = probe_source_duration(source_path)
+except ValueError as exc:
+    sys.exit(f"Cannot curate episode without valid source video: {exc}")
 
 # Args: curate.py <model> <podcast_slug> <episode_title>
 # podcast_slug: jelasin-dong | bocor-alus | tukang-kupas
@@ -144,6 +149,9 @@ for attempt in range(1, MAX_CURATE_ATTEMPTS + 1):
         _clips = validate_clips(
             _clips, segs, min_duration=35, max_duration=75
         )  # lenient: LLM often lands just outside 40-70
+        _clips = validate_clip_ranges(
+            _clips, segs, SOURCE_DURATION, min_duration=35, max_duration=75
+        )
         candidate["clips"] = _clips
         validated_data = candidate
         break  # fully valid

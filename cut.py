@@ -2,6 +2,8 @@
 """Cut klip dari clips.json: crop 9:16 + subtitle burn-in gaya TikTok."""
 import json, subprocess, os, sys
 from pathlib import Path
+from subtitle_timing import subtitle_chunks
+from clip_quality import probe_source_duration, validate_clip_ranges
 
 if len(sys.argv) < 2:
     sys.exit("Usage: python cut.py <source-video>")
@@ -11,35 +13,26 @@ if not WORK_DIR_VALUE:
     sys.exit("PODCAST_WORK_DIR is required, e.g. /tmp/podcast-clips/episode-id")
 WORK_DIR = Path(WORK_DIR_VALUE)
 CLIPS_DIR = WORK_DIR / "clips"
-CLIPS_DIR.mkdir(parents=True, exist_ok=True)
+try:
+    with open(WORK_DIR / "clips.json", encoding="utf-8") as f:
+        clips = json.load(f)
+    with open(WORK_DIR / "transcript.json", encoding="utf-8") as f:
+        segs = json.load(f)
+    source_duration = probe_source_duration(EP)
+    clips = validate_clip_ranges(clips, segs, source_duration)
+except (OSError, json.JSONDecodeError, ValueError) as exc:
+    sys.exit(f"Invalid clip input: {exc}")
 
-with open(WORK_DIR / "clips.json") as f:
-    clips = json.load(f)
-with open(WORK_DIR / "transcript.json") as f:
-    segs = json.load(f)
+CLIPS_DIR.mkdir(parents=True, exist_ok=True)
 
 FONT = "DejaVuSans-Bold"
 ok = 0
+failures = []
 for i, c in enumerate(clips, 1):
-    start, end = float(c["start"]), min(float(c["end"]), float(c["start"]) + 75)
+    start, end = c["start"], c["end"]
     dur = end - start
     # subtitle segmen dalam rentang klip
-    subs = []
-    for s in segs:
-        if s["end"] <= start or s["start"] >= end:
-            continue
-        st = max(s["start"], start) - start
-        en = min(s["end"], end) - start
-        # pecah text jadi max ~4 kata per tampilan (gaya TikTok)
-        words = s["text"].split()
-        n_words = max(len(words), 1)
-        for j in range(0, n_words, 4):
-            chunk = " ".join(words[j:min(j+4, n_words)])
-            if chunk.strip():
-                chunk_start = st + (en - st) * j / n_words
-                chunk_end = st + (en - st) * min(j + 4, n_words) / n_words
-                subs.append((chunk_start, chunk_end, chunk))
-    # generate ASS subtitle
+    subs = subtitle_chunks(segs, start, end)
     ass = ["[Script Info]", "ScriptType: v4.00+", "PlayResX: 1080", "PlayResY: 1920", "",
            "[V4+ Styles]",
            "Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding",
@@ -56,16 +49,28 @@ for i, c in enumerate(clips, 1):
     out_name = str(c.get("filename")) if isinstance(c.get("filename"), str) and c.get("filename").strip() else f"clip{i:02d}.mp4"
     if Path(out_name).name != out_name:
         out_name = Path(out_name).name
-    out = str(CLIPS_DIR / out_name)
+    out_path = CLIPS_DIR / out_name
+    tmp_out = CLIPS_DIR / f".{out_path.stem}.tmp{out_path.suffix}"
+    out = str(out_path)
     vf = (f"crop=ih*9/16:ih:(iw-ih*9/16)/2:0,scale=1080:1920,"
           f"ass={subs_file}:fontsdir=/usr/share/fonts/truetype/dejavu")
-    r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),
-        "-i", str(EP), "-vf", vf, "-c:v", "libx264", "-preset", "medium",
-        "-crf", "23", "-c:a", "aac", "-b:a", "128k", out],
-        capture_output=True, text=True)
-    if r.returncode == 0:
-        ok += 1
-        print(f"OK {out} ({dur:.0f}s) - {c['title']}")
-    else:
-        print(f"FAIL {out}: {r.stderr[-300:]}")
+    try:
+        r = subprocess.run(["ffmpeg", "-y", "-ss", str(start), "-t", str(dur),
+            "-i", str(EP), "-vf", vf, "-c:v", "libx264", "-preset", "medium",
+            "-crf", "23", "-c:a", "aac", "-b:a", "128k", str(tmp_out)],
+            capture_output=True, text=True)
+        if r.returncode == 0 and tmp_out.is_file() and tmp_out.stat().st_size > 0:
+            os.replace(tmp_out, out_path)
+            ok += 1
+            print(f"OK {out} ({dur:.0f}s) - {c['title']}")
+        else:
+            failures.append(f"Clip {i} failed: {r.stderr[-300:]}")
+            print(f"FAIL {out}: {r.stderr[-300:]}")
+    except OSError as exc:
+        failures.append(f"Clip {i} failed to start: {exc}")
+        print(f"FAIL {out}: {exc}")
+    finally:
+        tmp_out.unlink(missing_ok=True)
 print(f"\n{ok}/{len(clips)} clips done")
+if failures:
+    sys.exit(1)

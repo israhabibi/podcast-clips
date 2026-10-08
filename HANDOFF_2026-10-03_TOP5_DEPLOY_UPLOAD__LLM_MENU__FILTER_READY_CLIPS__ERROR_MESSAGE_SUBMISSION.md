@@ -182,6 +182,7 @@ User problem: Pertanyaan user "tukang-kupas uJC4ity3uDI gagal kenapa?" → dulu 
 | (NEW) `/tmp/podcast-clips/D7j0s9Mx6M0/...` | Fixture: real deployed folder app/static/clips/jelasin-dong/2026-10-02_.../jelasin-dong_..._top5.mp4; upload session actual YouTube 0-RzMiDYmS8 |
 
 ### Tests hijau:
+- Catatan: jumlah `68 tests` dan smoke run berikut adalah hasil sesi 2026-10-03, bukan hasil saat ini. Per 2026-10-07, suite fresh-environment yang berlaku berisi 106 test; lihat `REMEDIATION_KANBAN.md`.
 - ✅ SELALU JALANKAN: `cd /home/isra/podcast-clips && .venv/bin/python -m unittest discover -s . -p "test_*.py"`
 - ✅ Expected: `Ran 68 tests in 15-20s` **OK (0 failures)**
 - ✅ Restart `systemctl --user restart flask-app` → `curl -I /admin` → **HTTP 302** (redirect /admin/login)
@@ -205,12 +206,21 @@ Clip 2 duration must be 40-70 seconds after boundary alignment. ERROR: curate fa
 
 ---
 
-## 🧪 Known Open Issues (Saran next agent):
+## 🧪 Historical open issues (resolved or closed by the status audit below):
 
 1. **[LOW] Clip #2 duration boundary error 40-70s (curate.py)** — sering terjadi klip standalone per-episode (bukan kompilasi). User mungkin pengen auto-adjust juga seperti kompilasi 60s; tapi saat ini hanya fatal error. Next time bisa investigasi `curate.py` expand/shrink boundaries.
 2. **[MEDIUM] `scripts/run_one_episode.py` exit code non-zero tidak menulis output stderr ke DB**: Saat ini process_episode.py menangkap error code dan tulis pesan GENERIC, tapi actual stdout/stderr dari run_one_episode.py TIDAK di-capture (Popen sekarang text=False capture_output=False). Next improvement: jalankan subprocess.run dengan capture_output=True, text=True lalu jika exit code !=0 ambil stderr 2000 chars terakhir append ke error_message.
 3. **[LOW] uJC4ity3uDI FIXTURE TIDAK BISA di trace workspacenya** karena sudah dihapus kemarin. Jika user mau retry, coba delete row submission (bisa via admin panel nanti tambah button reset failed status), atau POST process lagi via admin.
 4. **[LOW] LLM test_client route `GET /admin` render** di standalone test (bukan flask live) kadang crash `BuildError: Could not build url for endpoint 'index'.` karena routes public (clips gallery) tidak diimport sebelum test; ini tidak mempengaruhi LIVE server, hanya unit test standalone (68/68 tetap hijau karena test login/moments/deploy tidak render full page).
+
+### Status audit (2026-10-07)
+
+- Issue 1 (clip duration/boundary errors): curation and both renderers now reject invalid ranges before rendering; auto-adjust is intentionally not enabled because it can change the selected moment. See PIPE-03 in `REMEDIATION_KANBAN.md`.
+- Issue 2 (worker error output missing from the admin log): resolved. `scripts/process_episode.py` captures stdout/stderr, relays them to its log stream, and stores the last 2,000 characters from each stream in the failed submission error.
+- Issue 3 (retrying failed admin submissions): resolved. Failed and pending rows now have an admin retry action; the row is atomically claimed and reused rather than deleted/recreated. See `test_failed_submission_can_be_retried_without_deleting_row`.
+- Issue 4 (standalone test route registration): no longer open; current tests register the gallery blueprint before rendering the admin page.
+
+This handoff records the 2026-10-03 session. For current task status and changed interfaces, use `REMEDIATION_KANBAN.md`, `TECHNICAL_REMEDIATION.md`, and `PIPELINE.md`.
 
 ---
 
